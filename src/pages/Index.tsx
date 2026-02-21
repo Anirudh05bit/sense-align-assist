@@ -20,8 +20,7 @@ const Index = () => {
             </div>
           </div>
           <div className="flex items-center gap-2 text-xs opacity-70">
-            <Shield className="w-3.5 h-3.5" />
-            <span>HIPAA Compliant</span>
+            
           </div>
         </div>
 
