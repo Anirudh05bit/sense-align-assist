@@ -6,6 +6,12 @@ import { useEyeTracking, type TrackingResult } from "@/hooks/useEyeTracking";
 
 const TRACKING_DURATION_SEC = 20;
 
+const COLOR_ROWS = [
+  { colors: ["#e74c3c", "#e74c3c", "#e74c3c", "#c0392b"], oddIndex: 3 },
+  { colors: ["#2ecc71", "#27ae60", "#2ecc71", "#2ecc71"], oddIndex: 1 },
+  { colors: ["#3498db", "#3498db", "#3498db", "#2980b9"], oddIndex: 3 },
+];
+
 const visionTests = [
   { id: 1, title: "Object Recognition Test", desc: "Identify objects displayed in image grids", time: "5 min" },
   { id: 2, title: "Visual Clarity Test", desc: "Read text at decreasing font sizes", time: "4 min" },
@@ -59,6 +65,8 @@ const VisionAssessment = () => {
 const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void }) => {
   const test = visionTests.find((t) => t.id === testId)!;
   const [selected, setSelected] = useState<number[]>([]);
+  const [colorSelections, setColorSelections] = useState<Record<number, number>>({});
+  const [claritySelection, setClaritySelection] = useState<number | null>(null);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [isRecording, setIsRecording] = useState(false);
   const [dotPosition, setDotPosition] = useState({ x: 50, y: 50 });
@@ -75,6 +83,16 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
   const isColor = testId === 3;
   const isScene = testId === 4;
   const isTracking = testId === 5;
+
+  useEffect(() => {
+    if (testId === 2) {
+      setClaritySelection(null);
+      setElapsedTime(0);
+    } else if (testId === 3) {
+      setColorSelections({});
+      setElapsedTime(0);
+    }
+  }, [testId]);
 
   const getDotPosition = useCallback(() => dotPositionRef.current, []);
 
@@ -134,7 +152,7 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
     };
   }, [isTracking]);
 
-  // Timer effect: 20-second countdown for tracking, elapsed for others
+  // Timer effect: 20-second countdown for tracking, elapsed for color/other tests
   useEffect(() => {
     if (isRecording && isTracking && !isTrackingComplete) {
       timerIntervalRef.current = setInterval(() => {
@@ -144,6 +162,10 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
           }
           return prev + 1;
         });
+      }, 1000);
+    } else if (isColor || isClarity) {
+      timerIntervalRef.current = setInterval(() => {
+        setElapsedTime((prev) => prev + 1);
       }, 1000);
     } else {
       if (timerIntervalRef.current) {
@@ -157,7 +179,7 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
         clearInterval(timerIntervalRef.current);
       }
     };
-  }, [isRecording, isTracking, isTrackingComplete]);
+  }, [isRecording, isTracking, isTrackingComplete, isColor, isClarity]);
 
   // Auto-submit when 20 seconds reached - stop dot, show result
   useEffect(() => {
@@ -226,6 +248,14 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
     return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
   };
 
+  const colorCorrect = Object.keys(colorSelections).filter(
+    (ri) => colorSelections[Number(ri)] === COLOR_ROWS[Number(ri)].oddIndex
+  ).length;
+  const colorAnswered = Object.keys(colorSelections).length;
+  const colorAccuracy = colorAnswered > 0 ? Math.round((colorCorrect / colorAnswered) * 100) : 0;
+
+  const clarityAccuracy = claritySelection !== null ? 100 : 0;
+
   return (
     <div className="p-8 animate-fade-in">
       <button onClick={onBack} className="text-sm text-primary hover:underline mb-4 block">← Back to tests</button>
@@ -246,7 +276,17 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
           <div className="clinical-card px-4 py-2 flex items-center gap-2">
             <BarChart2 className="w-4 h-4 text-muted-foreground" />
             <span className="text-sm font-medium text-foreground">
-              {trackingResult ? `Score: ${trackingResult.accuracyPercent}%` : "Score: --"}
+              {isClarity
+                ? claritySelection !== null
+                  ? "Score: 100%"
+                  : "Score: --"
+                : isColor
+                  ? colorAnswered > 0
+                    ? `Score: ${colorAccuracy}%`
+                    : "Score: --"
+                  : trackingResult
+                    ? `Score: ${trackingResult.accuracyPercent}%`
+                    : "Score: --"}
             </span>
           </div>
         </div>
@@ -274,35 +314,72 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
 
       {isClarity && (
         <div className="space-y-4">
-          <p className="text-sm text-muted-foreground mb-4">Indicate the smallest text size you can comfortably read:</p>
-          {[32, 24, 18, 14, 11, 8].map((size) => (
-            <div key={size} className="clinical-card p-4 flex items-center justify-between">
-              <span style={{ fontSize: size }} className="text-foreground">The quick brown fox jumps over the lazy dog</span>
-              <Button variant="outline" size="sm">I can read this</Button>
-            </div>
-          ))}
+          <p className="text-sm text-muted-foreground mb-4">Indicate the smallest text size you can comfortably read. Click &quot;I can read this&quot; on the smallest size you can read:</p>
+          {[32, 24, 18, 14, 11, 8].map((size) => {
+            const isSelected = claritySelection === size;
+            return (
+              <div
+                key={size}
+                className={`clinical-card p-4 flex items-center justify-between transition-colors ${
+                  isSelected ? "ring-2 ring-clinical-success border-clinical-success" : ""
+                }`}
+              >
+                <span style={{ fontSize: size }} className="text-foreground">
+                  The quick brown fox jumps over the lazy dog
+                </span>
+                <Button
+                  variant={isSelected ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setClaritySelection(size)}
+                >
+                  {isSelected ? "✓ Selected" : "I can read this"}
+                </Button>
+              </div>
+            );
+          })}
         </div>
       )}
 
       {isColor && (
         <div>
-          <p className="text-sm text-muted-foreground mb-4">Identify the mismatched color in each row:</p>
+          <p className="text-sm text-muted-foreground mb-4">Identify the mismatched color in each row. Click the odd one out:</p>
           <div className="space-y-4">
-            {[
-              { colors: ["#e74c3c", "#e74c3c", "#e74c3c", "#c0392b"], odd: 3 },
-              { colors: ["#2ecc71", "#27ae60", "#2ecc71", "#2ecc71"], odd: 1 },
-              { colors: ["#3498db", "#3498db", "#3498db", "#2980b9"], odd: 3 },
-            ].map((row, ri) => (
-              <div key={ri} className="flex gap-3">
-                {row.colors.map((c, ci) => (
-                  <button
-                    key={ci}
-                    className="w-16 h-16 rounded-xl border-2 border-border hover:border-primary transition-colors"
-                    style={{ backgroundColor: c }}
-                  />
-                ))}
-              </div>
-            ))}
+            {COLOR_ROWS.map((row, ri) => {
+              const selectedIdx = colorSelections[ri];
+              const isCorrect = selectedIdx !== undefined && selectedIdx === row.oddIndex;
+              return (
+                <div key={ri} className="flex gap-3 items-center">
+                  {row.colors.map((c, ci) => {
+                    const isSelected = selectedIdx === ci;
+                    return (
+                      <button
+                        key={ci}
+                        onClick={() =>
+                          setColorSelections((prev) => ({ ...prev, [ri]: ci }))
+                        }
+                        className={`w-16 h-16 rounded-xl border-2 transition-colors ${
+                          isSelected
+                            ? isCorrect
+                              ? "border-clinical-success ring-2 ring-clinical-success"
+                              : "border-destructive ring-2 ring-destructive"
+                            : "border-border hover:border-primary"
+                        }`}
+                        style={{ backgroundColor: c }}
+                      />
+                    );
+                  })}
+                  {selectedIdx !== undefined && (
+                    <span className="text-sm font-medium">
+                      {isCorrect ? (
+                        <span className="text-clinical-success">✓ Correct</span>
+                      ) : (
+                        <span className="text-destructive">✗ Try again</span>
+                      )}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -388,25 +465,57 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
         <div className="grid grid-cols-3 gap-4">
           <div className="text-center">
             <p className="text-2xl font-bold text-foreground">
-              {isTracking && trackingResult ? trackingResult.matchCount : "--"}
+              {isClarity
+                ? claritySelection !== null
+                  ? "1"
+                  : "--"
+                : isColor
+                  ? colorAnswered > 0
+                    ? colorCorrect
+                    : "--"
+                  : isTracking && trackingResult
+                    ? trackingResult.matchCount
+                    : "--"}
             </p>
             <p className="text-xs text-muted-foreground">Correct</p>
           </div>
           <div className="text-center">
             <p className="text-2xl font-bold text-foreground">
-              {isTracking && trackingResult ? `${trackingResult.accuracyPercent}%` : "--"}
+              {isClarity
+                ? claritySelection !== null
+                  ? "100%"
+                  : "--"
+                : isColor
+                  ? colorAnswered > 0
+                    ? `${colorAccuracy}%`
+                    : "--"
+                  : isTracking && trackingResult
+                    ? `${trackingResult.accuracyPercent}%`
+                    : "--"}
             </p>
             <p className="text-xs text-muted-foreground">Accuracy %</p>
           </div>
           <div className="text-center">
             <p className="text-2xl font-bold text-foreground">
-              {isTracking && trackingResult ? `${trackingResult.timeTaken}s` : "--"}
+              {isClarity || isColor
+                ? formatTime(elapsedTime)
+                : isTracking && trackingResult
+                  ? `${trackingResult.timeTaken}s`
+                  : "--"}
             </p>
             <p className="text-xs text-muted-foreground">Time Taken</p>
           </div>
         </div>
         <Progress
-          value={isTracking && trackingResult ? trackingResult.accuracyPercent : 0}
+          value={
+            isClarity
+              ? clarityAccuracy
+              : isColor
+                ? colorAccuracy
+                : isTracking && trackingResult
+                  ? trackingResult.accuracyPercent
+                  : 0
+          }
           className="mt-4 h-1.5"
         />
       </div>
