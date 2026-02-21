@@ -113,7 +113,7 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
     []
   );
 
-  const { startTracking, stopTracking } = useEyeTracking(
+  const { startTracking, stopTracking, completeWithCurrentResult } = useEyeTracking(
     videoRef,
     getDotPosition,
     isRecording && isTracking && !isTrackingComplete,
@@ -159,12 +159,12 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
     };
   }, [isRecording, isTracking, isTrackingComplete]);
 
-  // Auto-submit when 20 seconds reached
+  // Auto-submit when 20 seconds reached - stop dot, show result
   useEffect(() => {
     if (isTracking && isRecording && elapsedTime >= TRACKING_DURATION_SEC && !isTrackingComplete) {
-      stopTracking();
+      completeWithCurrentResult(elapsedTime);
     }
-  }, [elapsedTime, isTracking, isRecording, isTrackingComplete, stopTracking]);
+  }, [elapsedTime, isTracking, isRecording, isTrackingComplete, completeWithCurrentResult]);
 
   // Moving dot animation for Visual Tracking
   useEffect(() => {
@@ -325,8 +325,8 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
         <div>
           <p className="text-sm text-muted-foreground mb-4">
             {isTrackingComplete
-              ? "Test complete. Your eye tracking accuracy has been recorded below."
-              : "Follow the moving dot with your eyes for 20 seconds. Your face is being recorded for analysis."}
+              ? "Test complete. Your tracking accuracy has been recorded below."
+              : "Follow the moving dot with your eyes and turn your head slightly toward it. Your face is being recorded for analysis."}
           </p>
           <div className="clinical-card bg-muted rounded-xl h-96 flex items-center justify-center relative overflow-hidden">
             {isTrackingComplete ? (
