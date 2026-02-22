@@ -30,15 +30,8 @@ const audioRecognitionQuestions = [
     audioSrc: "/audio/recognition_speech.mp3",
     prompt: "Listen to the clip and identify it:",
     options: ["Speech", "Music", "Nature Sound", "Silence"],
-    correctIndex: 0,
-  },
-  {
-    id: 2,
-    audioSrc: "/audio/recognition_music.mp3",
-    prompt: "Listen to the clip and identify it:",
-    options: ["Speech", "Music", "Nature Sound", "Silence"],
     correctIndex: 1,
-  },
+  }
 ] as const;
 
 const soundDiffQuestions = [
@@ -492,33 +485,39 @@ const HearingTestView = ({ testId, onBack }: { testId: number; onBack: () => voi
   const [submitted, setSubmitted] = useState(false);
   const [isCorrect, setIsCorrect] = useState<boolean | null>(null);
 
+/**
+   * -------------------------
+   * IMPROVED TEST 1 LOGIC
+   * -------------------------
+   */
   const playAudio = async () => {
-    if (!audioRef.current) return;
-    setAudioDone(false);
-    setSubmitted(false);
-    setIsCorrect(null);
-    try {
-      await audioRef.current.play();
-    } catch {
-      // autoplay restrictions or missing file
-    }
-  };
+  if (!audioRef.current) return;
 
-  const submitRecAnswer = () => {
-    if (selected === null) return;
-    setSubmitted(true);
-    const ok = selected === recQ.correctIndex;
-    setIsCorrect(ok);
-    setScoreDisplay(ok ? "1/1" : "0/1");
-  };
+  try {
+    audioRef.current.currentTime = 0;
+    await audioRef.current.play();
 
-  const nextRecQuestion = () => {
-    setSelected(null);
-    setSubmitted(false);
-    setIsCorrect(null);
-    setAudioDone(false);
-    setRecQIndex((p) => Math.min(p + 1, audioRecognitionQuestions.length - 1));
-  };
+    // 🔥 ENABLE OPTIONS IMMEDIATELY AFTER CLICK
+    setAudioDone(true);
+
+  } catch (err) {
+    console.error("Playback failed:", err);
+    setAudioDone(true); // fallback unlock
+  }
+};
+
+const submitRecAnswer = () => {
+  if (selected === null) return;
+
+  setSubmitted(true);
+
+  const ok = selected === recQ.correctIndex; // correctIndex = 1 (Music)
+  setIsCorrect(ok);
+
+  // Since only 1 question
+  setScoreDisplay(ok ? "1/1" : "0/1");
+};
+
 
   /**
    * -----------------------------
@@ -719,7 +718,7 @@ const sentenceScores = useMemo(() => {
                   variant="outline"
                   className={`justify-start text-sm ${selectedStyle} ${resultStyle}`}
                   onClick={() => !submitted && setSelected(idx)}
-                  disabled={!audioDone}
+                  disabled={!audioDone || submitted}
                 >
                   {opt}
                 </Button>
@@ -732,15 +731,7 @@ const sentenceScores = useMemo(() => {
               Submit
             </Button>
 
-            <Button
-              variant="outline"
-              onClick={nextRecQuestion}
-              disabled={!submitted || recQIndex === audioRecognitionQuestions.length - 1}
-            >
-              Next <ChevronRight className="w-3 h-3 ml-1" />
-            </Button>
-
-            {submitted && (
+                 {submitted && (
               <span className="text-sm">
                 {isCorrect ? (
                   <span className="text-emerald-600">Correct</span>

