@@ -402,6 +402,7 @@ const MicMeter = () => {
 
 const HearingAssessment = () => {
   const [activeTest, setActiveTest] = useState<number | null>(null);
+  
 
   if (activeTest !== null) {
     return <HearingTestView testId={activeTest} onBack={() => setActiveTest(null)} />;
@@ -434,7 +435,12 @@ const HearingAssessment = () => {
             <span className="text-xs text-muted-foreground flex items-center gap-1">
               <Clock className="w-3 h-3" /> {test.time}
             </span>
-            <Button size="sm" onClick={() => setActiveTest(test.id)}>
+            {/* STEP 3 - DATA ATTR ADDED */}
+            <Button 
+                size="sm" 
+                data-test={test.id}
+                onClick={() => setActiveTest(test.id)}
+            >
               Start <ChevronRight className="w-3 h-3 ml-1" />
             </Button>
           </div>
@@ -452,7 +458,8 @@ const HearingAssessment = () => {
 
 const HearingTestView = ({ testId, onBack }: { testId: number; onBack: () => void }) => {
   const test = hearingTests.find((t) => t.id === testId)!;
-   
+  // STEP 1 - STATE INJECTED
+  const [showModal, setShowModal] = useState(false); 
   // Speech (used by tests 3 & 4)
   const recognizer = useSpeechRecognizer();
   const [manualSentence, setManualSentence] = useState("");
@@ -460,6 +467,29 @@ const HearingTestView = ({ testId, onBack }: { testId: number; onBack: () => voi
   const [scoreDisplay, setScoreDisplay] = useState<string>("--");
   // Track currently playing audio across all clips
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+
+// STEP 2 - IMPROVED FUNCTION REPLACED
+const handleSubmitAndNext = () => {
+  setShowModal(true);
+
+  setTimeout(() => {
+    setShowModal(false);
+
+    // go to next test safely
+    if (testId < hearingTests.length) {
+      const nextId = testId + 1;
+      onBack(); // go to list first
+
+      setTimeout(() => {
+        const btn = document.querySelector(`[data-test="${nextId}"]`);
+        (btn as HTMLButtonElement)?.click();
+      }, 300);
+    } else {
+      alert("All tests completed 🎉");
+      onBack();
+    }
+  }, 1800);
+};
 
   const handleAudioPlay = (audioElement: HTMLAudioElement) => {
     // Stop currently playing audio
@@ -1012,12 +1042,29 @@ const sentenceScores = useMemo(() => {
         <Button variant="outline" onClick={onBack}>
           Save & Exit
         </Button>
-        <Button onClick={() => { /* hook into your routing / state machine */ }}>
+        {/* STEP 4 - BUTTON REPLACED */}
+        <Button onClick={handleSubmitAndNext}>
           Submit & Next Test <ChevronRight className="w-3 h-3 ml-1" />
         </Button>
       </div>
+
+      {/* STEP 5 - POPUP UI INJECTED */}
+      {showModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-card rounded-xl p-8 shadow-xl w-[380px] text-center animate-fade-in">
+            <CheckCircle2 className="w-12 h-12 text-emerald-500 mx-auto mb-4" />
+            <h3 className="text-lg font-semibold mb-2">Test Submitted Successfully</h3>
+            <p className="text-sm text-muted-foreground mb-4">
+              Moving to next test...
+            </p>
+
+            <div className="h-1 w-full bg-muted rounded overflow-hidden">
+              <div className="h-1 bg-emerald-500 animate-pulse w-full" />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
-
 export default HearingAssessment;
