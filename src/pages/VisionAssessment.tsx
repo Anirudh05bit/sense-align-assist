@@ -89,7 +89,9 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
   const test = visionTests.find((t) => t.id === testId)!;
   const [selected, setSelected] = useState<number[]>([]);
   const [colorSelections, setColorSelections] = useState<Record<number, number>>({});
-  const [claritySelection, setClaritySelection] = useState<number | null>(null);
+  const [claritySelections, setClaritySelections] = useState<number[]>([]);
+  const [clarityStartTime, setClarityStartTime] = useState<number | null>(null);
+  const [clarityCurrentTime, setClarityCurrentTime] = useState(0);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [isRecording, setIsRecording] = useState(false);
   const [sceneDescriptionText, setSceneDescriptionText] = useState<string>("");
@@ -100,6 +102,7 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
   const [objectRecognitionRoundStartTime, setObjectRecognitionRoundStartTime] = useState<number | null>(null);
   const [objectRecognitionRoundTimes, setObjectRecognitionRoundTimes] = useState<number[]>([]);
   const [objectRecognitionCorrectCount, setObjectRecognitionCorrectCount] = useState(0);
+  const [objectRecognitionWrongCount, setObjectRecognitionWrongCount] = useState(0);
   const [objectRecognitionShowCorrect, setObjectRecognitionShowCorrect] = useState(false);
   const [objectRecognitionShowWrong, setObjectRecognitionShowWrong] = useState(false);
   const [objectRecognitionWrongId, setObjectRecognitionWrongId] = useState<number | null>(null);
@@ -234,7 +237,7 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
 
   useEffect(() => {
     if (testId === 2) {
-      setClaritySelection(null);
+      setClaritySelections([]);
       setElapsedTime(0);
     } else if (testId === 3) {
       setColorSelections({});
@@ -253,6 +256,7 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
       setObjectRecognitionRoundStartTime(Date.now());
       setObjectRecognitionRoundTimes([]);
       setObjectRecognitionCorrectCount(0);
+      setObjectRecognitionWrongCount(0);
       setObjectRecognitionShowCorrect(false);
       setObjectRecognitionShowWrong(false);
       setObjectRecognitionWrongId(null);
@@ -373,6 +377,29 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
     };
   }, [isObjectRecognition, objectRecognitionRoundStartTime, objectRecognitionMetrics]);
 
+  // Timer effect for Clarity test
+  useEffect(() => {
+    if (isClarity && clarityStartTime && claritySelections.length > 0) {
+      timerIntervalRef.current = setInterval(() => {
+        setClarityCurrentTime(() => {
+          const elapsed = (Date.now() - (clarityStartTime || Date.now())) / 1000;
+          return elapsed;
+        });
+      }, 100);
+    } else {
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+        timerIntervalRef.current = null;
+      }
+    }
+
+    return () => {
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+      }
+    };
+  }, [isClarity, clarityStartTime, claritySelections]);
+
   // Auto-submit when 20 seconds reached - stop dot, show result
   useEffect(() => {
     if (isTracking && isRecording && elapsedTime >= TRACKING_DURATION_SEC && !isTrackingComplete) {
@@ -447,12 +474,11 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
   const colorAccuracy = colorAnswered > 0 ? Math.round((colorCorrect / colorAnswered) * 100) : 0;
 
   const clarityAccuracy = (() => {
-    if (claritySelection === null) return 0;
-    const maxSize = 32;
-    const minSize = 8;
-    // smaller text size -> higher score (8px -> 100%, 32px -> 0%)
-    const pct = Math.round(((maxSize - claritySelection) / (maxSize - minSize)) * 100);
-    return Math.max(0, Math.min(100, pct));
+    if (claritySelections.length === 0) return 0;
+    // Each font size is worth 16.67% (100 / 6 sizes)
+    const weightPerSize = 100 / 6;
+    const totalScore = claritySelections.length * weightPerSize;
+    return Math.round(totalScore);
   })();
 
   return (
@@ -480,7 +506,7 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
                 <BarChart2 className="w-4 h-4 text-muted-foreground" />
                 <span className="text-sm font-medium text-foreground">
                   {isClarity
-                    ? claritySelection !== null
+                    ? claritySelections.length > 0
                       ? `Score: ${clarityAccuracy}%`
                       : "Score: --"
                     : isColor
@@ -571,6 +597,7 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
                           }, 1500);
                         } else {
                           // Wrong selection
+                          setObjectRecognitionWrongCount(objectRecognitionWrongCount + 1);
                           setObjectRecognitionShowWrong(true);
                           setObjectRecognitionWrongId(obj.id);
                           
@@ -658,23 +685,68 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
 
       {isClarity && (
         <div className="space-y-4">
-          <p className="text-sm text-muted-foreground mb-4">Indicate the smallest text size you can comfortably read. Click &quot;I can read this&quot; on the smallest size you can read:</p>
+          <p className="text-sm text-muted-foreground mb-4">Select all sizes you can comfortably read. The score increases as you select more readable sizes! Click &quot;I can read this&quot;:</p>
+          
+          {/* Live Score Display */}
+          <div className="bg-gradient-to-r from-blue-50 to-blue-100 rounded-lg p-4 border border-blue-200 mb-4">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-semibold text-foreground">Score:</span>
+              <span className="text-3xl font-bold text-clinical-info">{clarityAccuracy}%</span>
+            </div>
+            <div className="w-full bg-blue-200 rounded-full h-2 mt-2">
+              <div 
+                className="bg-clinical-success h-2 rounded-full transition-all duration-300"
+                style={{ width: `${clarityAccuracy}%` }}
+              />
+            </div>
+            {claritySelections.length > 0 && (
+              <div>
+                <p className="text-xs text-muted-foreground mt-2">
+                  ✓ Selected: {claritySelections.length} size{claritySelections.length > 1 ? "s" : ""} | Smallest: {Math.min(...claritySelections)}px
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  ⏱️ Time: {clarityCurrentTime.toFixed(1)}s
+                </p>
+              </div>
+            )}
+          </div>
+
           {[32, 24, 18, 14, 11, 8].map((size) => {
-            const isSelected = claritySelection === size;
+            const isSelected = claritySelections.includes(size);
+            const weightPerSize = 100 / 6; // 16.67% per font size
+            const possibleScore = Math.round(weightPerSize);
+            
             return (
               <div
                 key={size}
-                className={`clinical-card p-4 flex items-center justify-between transition-colors ${
-                  isSelected ? "ring-2 ring-clinical-success border-clinical-success" : ""
+                className={`clinical-card p-4 flex items-center justify-between transition-all ${
+                  isSelected ? "ring-2 ring-clinical-success border-clinical-success bg-green-50" : "hover:border-primary"
                 }`}
               >
-                <span style={{ fontSize: size }} className="text-foreground">
-                  The quick brown fox jumps over the lazy dog
-                </span>
+                <div className="flex-1">
+                  <span style={{ fontSize: size }} className="text-foreground block mb-2">
+                    The quick brown fox jumps over the lazy dog
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    Size: {size}px | Weight: {possibleScore}%
+                  </span>
+                </div>
                 <Button
                   variant={isSelected ? "default" : "outline"}
                   size="sm"
-                  onClick={() => setClaritySelection(size)}
+                  onClick={() => {
+                    // Start timer on first selection
+                    if (claritySelections.length === 0 && !clarityStartTime) {
+                      setClarityStartTime(Date.now());
+                    }
+                    
+                    setClaritySelections((prev) =>
+                      prev.includes(size)
+                        ? prev.filter((s) => s !== size)
+                        : [...prev, size]
+                    );
+                  }}
+                  className="ml-3"
                 >
                   {isSelected ? "✓ Selected" : "I can read this"}
                 </Button>
@@ -731,11 +803,11 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
       {isScene && (
         <div>
           <p className="text-sm text-muted-foreground mb-4"></p>
-          <div className="clinical-card p-0 mb-3 rounded-lg overflow-hidden h-48 flex items-center justify-center bg-muted">
+          <div className="clinical-card p-0 mb-3 rounded-lg overflow-hidden h-98 flex items-center justify-center bg-muted">
             <img 
               src="/Images/image.png" 
               alt="Scene description test image"
-              className="w-full h-full object-cover"
+              className="w-108 h-108 object-cover"
             />
           </div>
           <textarea
@@ -841,8 +913,8 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
               {isObjectRecognition && !objectRecognitionMetrics
                 ? `${objectRecognitionRound}/3`
                 : isClarity
-                  ? claritySelection !== null
-                    ? "1"
+                  ? claritySelections.length > 0
+                    ? `${claritySelections.length}`
                     : "--"
                   : isColor
                     ? colorAnswered > 0
@@ -861,9 +933,9 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
           <div className="text-center">
             <p className="text-2xl font-bold text-foreground">
               {isObjectRecognition && !objectRecognitionMetrics
-                ? "--"
+                ? `${Math.round((objectRecognitionCorrectCount / (objectRecognitionCorrectCount + objectRecognitionWrongCount || 1)) * 100)}%`
                 : isClarity
-                  ? claritySelection !== null
+                  ? claritySelections.length > 0
                     ? `${clarityAccuracy}%`
                     : "--"
                   : isColor
@@ -884,13 +956,15 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
             <p className="text-2xl font-bold text-foreground">
               {isObjectRecognition && objectRecognitionCurrentRoundTime
                 ? `${objectRecognitionCurrentRoundTime.toFixed(1)}s`
-                : isClarity || isColor
-                  ? formatTime(elapsedTime)
-                  : isScene
+                : isClarity && clarityCurrentTime
+                  ? `${clarityCurrentTime.toFixed(1)}s`
+                  : isColor
                     ? formatTime(elapsedTime)
-                    : isTracking && trackingResult
-                      ? `${trackingResult.timeTaken}s`
-                      : "--"}
+                    : isScene
+                      ? formatTime(elapsedTime)
+                      : isTracking && trackingResult
+                        ? `${trackingResult.timeTaken}s`
+                        : "--"}
             </p>
             <p className="text-xs text-muted-foreground">Time Taken</p>
           </div>
@@ -898,7 +972,7 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
         <Progress
           value={
             isObjectRecognition && !objectRecognitionMetrics
-              ? (objectRecognitionCorrectCount / 3) * 100
+              ? (objectRecognitionCorrectCount / (objectRecognitionCorrectCount + objectRecognitionWrongCount || 1)) * 100
               : isClarity
                 ? clarityAccuracy
                 : isColor
@@ -932,7 +1006,7 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
               let finalScore = 0;
               let testName = test.title;
               
-              if (isClarity && claritySelection !== null) {
+              if (isClarity && claritySelections.length > 0) {
                 finalScore = clarityAccuracy;
               } else if (isColor && colorAnswered > 0) {
                 finalScore = colorAccuracy;
