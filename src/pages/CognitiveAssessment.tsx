@@ -58,17 +58,14 @@ const median = (arr: number[]): number => {
 /**
  * Reaction Time Score (0–100)
  * Special-needs friendly, baseline-referenced approach:
- * 
- * Uses MEDIAN of reaction times (robust to outliers)
+ * * Uses MEDIAN of reaction times (robust to outliers)
  * Compares against school-age baseline:
- *   μh = 300ms (typical healthy median)
- *   σh = 80ms (typical spread)
- * 
- * Scoring uses z-score with forgiving curve:
- *   z = (median - μh) / σh
- *   score = 100 × (1 - z² / 2), clamped to 0-100
- * 
- * Fair approach: decent baseline score even for slower kids
+ * μh = 300ms (typical healthy median)
+ * σh = 80ms (typical spread)
+ * * Scoring uses z-score with forgiving curve:
+ * z = (median - μh) / σh
+ * score = 100 × (1 - z² / 2), clamped to 0-100
+ * * Fair approach: decent baseline score even for slower kids
  */
 function scoreReactionTime(medianMs: number) {
   const muHealthy = 300;  // ms, typical median RT for school-age
@@ -90,17 +87,14 @@ function scoreReactionTime(medianMs: number) {
 
 /**
  * Pattern Matching score (special-needs friendly, 0–100)
- * 
- * Components:
+ * * Components:
  * - Accuracy points (0–70): S_acc = 70 × A
  * - Speed points (0–30): S_spd = 30 × p, where p is speed factor with grace period
- * 
- * Grace period: 6 seconds (before penalty applies)
+ * * Grace period: 6 seconds (before penalty applies)
  * Adjusted time: T' = max(0, T - grace)
  * Z-score: z = (T' - μ) / σ
  * Speed factor: p = clamp(1 - z²/2, 0, 1)
- * 
- * Level-specific baselines (μ, σ):
+ * * Level-specific baselines (μ, σ):
  * - Level 1 (4 tiles): μ=4s, σ=2s
  * - Level 2 (8 tiles): μ=6s, σ=3s
  */
@@ -130,13 +124,10 @@ function scorePatternMatching(accuracyPct: number, avgSec: number, level: number
 
 /**
  * Memory Recall score rule (new - fair scoring for special needs):
- * 
- * AccuracyScore (0-70 points): correctly recalled positions
+ * * AccuracyScore (0-70 points): correctly recalled positions
  * SpeedScore (0-30 points): time taken with grace period + minimum score
- * 
- * Total = AccuracyScore + SpeedScore (0-100)
- * 
- * Parameters:
+ * * Total = AccuracyScore + SpeedScore (0-100)
+ * * Parameters:
  * - grace = 10 sec (extra buffer for users with slower motor skills)
  * - typicalMean = 10 sec (baseline for a 5-item recall task)
  * - typicalSD = 4 sec (std dev, used for reference)
@@ -227,7 +218,11 @@ const CognitiveAssessment = () => {
             <span className="text-xs text-muted-foreground flex items-center gap-1">
               <Clock className="w-3 h-3" /> {test.time}
             </span>
-            <Button size="sm" onClick={() => setActiveTest(test.id)}>
+            <Button 
+              size="sm" 
+              data-test={test.id} // <--- MODIFICATION 3
+              onClick={() => setActiveTest(test.id)}
+            >
               Start Assessment
             </Button>
           </div>
@@ -241,13 +236,40 @@ const CognitiveTestView = ({ testId, onBack }: { testId: number; onBack: () => v
   const test = cognitiveTests.find((t) => t.id === testId)!;
 
   // ------------------------------------------------------------
-  // Shared timer: MUST start only when test actually starts
+  // MODIFICATION 1: Modal State
   // ------------------------------------------------------------
+  const [showModal, setShowModal] = useState(false);
   const [elapsedTime, setElapsedTime] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // A per-test "timerRunning" gate
   const [timerRunning, setTimerRunning] = useState(false);
+
+  // ------------------------------------------------------------
+  // MODIFICATION 2: Navigation Function
+  // ------------------------------------------------------------
+  const handleSubmitAndNext = () => {
+    setShowModal(true);
+
+    setTimeout(() => {
+      setShowModal(false);
+
+      // If there are more tests, navigate to the next one
+      if (testId < cognitiveTests.length) {
+        const nextId = testId + 1;
+        onBack(); // Return to the list page first
+
+        // Delay clicking the next button so the list page has time to mount
+        setTimeout(() => {
+          const btn = document.querySelector(`[data-test="${nextId}"]`);
+          (btn as HTMLButtonElement)?.click();
+        }, 300);
+      } else {
+        alert("All cognitive assessments completed 🎉");
+        onBack();
+      }
+    }, 1800);
+  };
 
   useEffect(() => {
     // when switching tests, reset timer + stop interval
@@ -1035,10 +1057,31 @@ const CognitiveTestView = ({ testId, onBack }: { testId: number; onBack: () => v
         <Button variant="outline" onClick={onBack}>
           Save & Exit
         </Button>
-        <Button disabled={!isComplete}>
-          Submit Results <ChevronRight className="w-3 h-3 ml-1" />
+        <Button 
+          disabled={!isComplete} 
+          onClick={handleSubmitAndNext} // <--- MODIFICATION 4
+        >
+          Submit & Next Test <ChevronRight className="w-3 h-3 ml-1" />
         </Button>
       </div>
+
+      {/* ------------------------------------------------------------
+          MODIFICATION 5: Modal UI
+      ------------------------------------------------------------ */}
+      {showModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-card rounded-xl p-8 shadow-xl w-[380px] text-center animate-fade-in">
+            <CheckCircle2 className="w-12 h-12 text-emerald-500 mx-auto mb-4" />
+            <h3 className="text-lg font-semibold mb-2">Test Submitted Successfully</h3>
+            <p className="text-sm text-muted-foreground mb-4">
+              Moving to next test...
+            </p>
+            <div className="h-1 w-full bg-muted rounded overflow-hidden">
+              <div className="h-1 bg-emerald-500 animate-pulse w-full" />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
