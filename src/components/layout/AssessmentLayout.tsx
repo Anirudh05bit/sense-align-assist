@@ -15,7 +15,6 @@ const navItems = [
   { title: "Upload Reports", path: "/upload", icon: FileText },
   { title: "Ability Report", path: "/report", icon: BarChart3 },
   { title: "AI Support", path: "/support", icon: MessageCircle },
-  { title: "Assistant", path: "/assistant", icon: Lightbulb },
 ];
 
 const AssessmentLayout = () => {

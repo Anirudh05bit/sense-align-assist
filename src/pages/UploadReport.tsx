@@ -7,6 +7,49 @@ const UploadReport = () => {
   const [files, setFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [extractedText, setExtractedText] = useState("");
+  const [isUploading, setIsUploading] = useState(false);
+  const [analysis, setAnalysis] = useState<any>(null);
+  const [assistantRoute, setAssistantRoute] = useState(""); // NEW STATE
+  const [error, setError] = useState("");
+
+  const uploadToBackend = async () => {
+    if (files.length === 0) return;
+
+    setIsUploading(true);
+    setError("");
+
+    try {
+      const formData = new FormData();
+      formData.append("file", files[0]);
+
+      const res = await fetch("http://localhost:8000/analyze-report", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!res.ok) throw new Error("Upload failed");
+
+      const data = await res.json();
+
+      // Store analysis
+      setAnalysis(data.analysis);
+
+      // Store assistant type instead of redirecting immediately
+      setAssistantRoute(data.assistant_to_load);
+
+      // Show nicely formatted summary instead of raw JSON
+      setExtractedText(
+        `Primary Disability: ${data.analysis.primary_disability}
+          Confidence: ${data.analysis.confidence}%
+          Recommended Assistant: ${data.assistant_to_load}`
+      );
+
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsUploading(false);
+    }
+  };
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -27,6 +70,22 @@ const UploadReport = () => {
     setFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
+  const openAssistant = () => {
+    if (assistantRoute === "visual_assistant") {
+      window.location.href = "/assistants/visual";
+    }
+    if (assistantRoute === "speech_assistant") {
+      window.location.href = "/assistants/speech";
+    }
+    if (assistantRoute === "learning_assistant") {
+      window.location.href = "/assistants/learning";
+    }
+  };
+
+  const formatLabel = (value: string) => {
+    return value.replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase());
+  };
+
   return (
     <div className="p-8 max-w-4xl animate-fade-in">
       <div className="mb-8">
@@ -36,7 +95,6 @@ const UploadReport = () => {
         </p>
       </div>
 
-      {/* Drop Zone */}
       <div
         onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
         onDragLeave={() => setIsDragging(false)}
@@ -53,7 +111,6 @@ const UploadReport = () => {
         <input id="file-input" type="file" multiple accept=".pdf,.jpg,.jpeg,.png" className="hidden" onChange={handleFileSelect} />
       </div>
 
-      {/* File List */}
       {files.length > 0 && (
         <div className="mt-6 space-y-3">
           <h3 className="font-display font-semibold text-sm text-foreground">Uploaded Files</h3>
@@ -76,41 +133,74 @@ const UploadReport = () => {
         </div>
       )}
 
-      {/* Extracted Summary */}
       {files.length > 0 && (
         <div className="mt-8 space-y-6">
           <div className="clinical-card p-6">
             <h3 className="font-display font-semibold text-foreground mb-1">Extracted Diagnosis Summary</h3>
             <p className="text-xs text-muted-foreground mb-4">AI-extracted content from your uploaded reports</p>
-            <div className="bg-muted rounded-lg p-4 mb-4">
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span>Processing document... Diagnosis classification will appear here.</span>
+            {analysis && (
+              <div className="mb-4 bg-white rounded-lg border p-4 shadow-sm">
+                <div className="grid md:grid-cols-3 gap-4">
+
+                  {/* Primary Disability */}
+                  <div className="text-center">
+                    <p className="text-xs text-muted-foreground mb-1">Primary Condition</p>
+                    <p className="font-semibold text-lg text-primary">
+                      {formatLabel(analysis.primary_disability)}
+                    </p>
+                  </div>
+
+                  {/* Confidence */}
+                  <div className="text-center">
+                    <p className="text-xs text-muted-foreground mb-1">Confidence Level</p>
+                    <div className="w-full bg-muted rounded-full h-2 mt-2">
+                      <div
+                        className="bg-green-500 h-2 rounded-full"
+                        style={{ width: `${analysis.confidence}%` }}
+                      />
+                    </div>
+                    <p className="text-sm mt-1">
+                      {analysis.confidence}%
+                    </p>
+                  </div>
+
+                  {/* Assistant */}
+                  <div className="text-center">
+                    <p className="text-xs text-muted-foreground mb-1">Recommended Assistant</p>
+                    <p className="font-semibold text-lg text-green-600">
+                      {formatLabel(assistantRoute.replace("_assistant", ""))}
+                    </p>
+                  </div>
+
+                </div>
               </div>
-            </div>
-            <Textarea
-              value={extractedText}
-              onChange={(e) => setExtractedText(e.target.value)}
-              placeholder="Editable extracted text section..."
-              rows={4}
-            />
+            )}
+          
           </div>
 
-          {/* Classification Placeholders */}
-          <div className="grid md:grid-cols-3 gap-4">
-            {["Visual Impairment", "Hearing/Speech", "Cognitive/Learning"].map((cat) => (
-              <div key={cat} className="clinical-card p-4 text-center">
-                <p className="text-xs text-muted-foreground mb-1">Classification</p>
-                <p className="font-display font-semibold text-foreground text-sm">{cat}</p>
-                <p className="text-xs text-muted-foreground mt-1">Awaiting analysis...</p>
-              </div>
-            ))}
-          </div>
-
-          <Button size="lg" className="w-full">
-            <Check className="w-4 h-4 mr-2" />
-            Generate Adaptive Profile
+          <Button size="lg" className="w-full" onClick={uploadToBackend} disabled={isUploading}>
+            {isUploading ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                Analyzing Report...
+              </>
+            ) : (
+              <>
+                <Check className="w-4 h-4 mr-2" />
+                Generate Adaptive Profile
+              </>
+            )}
           </Button>
+
+          {assistantRoute && (
+            <Button size="lg" className="w-full mt-4" onClick={openAssistant}>
+              Open Your Personalized Assistant →
+            </Button>
+          )}
+
+          {error && (
+            <p className="text-red-500 text-sm mt-2">{error}</p>
+          )}
         </div>
       )}
     </div>
