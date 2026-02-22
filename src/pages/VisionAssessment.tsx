@@ -7,6 +7,20 @@ import umagepng from "../public/image.png";
 
 const TRACKING_DURATION_SEC = 20;
 
+// Object Recognition Test Data
+const OBJECTS = [
+  { id: 1, label: "apple", category: "food", emoji: "🍎" },
+  { id: 2, label: "car", category: "vehicle", emoji: "🚗" },
+  { id: 3, label: "phone", category: "device", emoji: "📱" },
+  { id: 4, label: "tree", category: "nature", emoji: "🌳" },
+  { id: 5, label: "airplane", category: "vehicle", emoji: "✈️" },
+  { id: 6, label: "house", category: "building", emoji: "🏠" },
+  { id: 7, label: "clock", category: "device", emoji: "⏰" },
+  { id: 8, label: "books", category: "education", emoji: "📚" },
+];
+
+const RECOGNITION_CATEGORIES = ["vehicle", "device", "nature"];
+
 const COLOR_ROWS = [
   { colors: ["#e74c3c", "#e74c3c", "#e74c3c", "#c0392b"], oddIndex: 3 },
   { colors: ["#2ecc71", "#27ae60", "#2ecc71", "#2ecc71"], oddIndex: 1 },
@@ -24,8 +38,16 @@ const visionTests = [
 const VisionAssessment = () => {
   const [activeTest, setActiveTest] = useState<number | null>(null);
 
+  const handleNextTest = (currentTestId: number) => {
+    if (currentTestId < 5) {
+      setActiveTest(currentTestId + 1);
+    } else {
+      setActiveTest(null);
+    }
+  };
+
   if (activeTest !== null) {
-    return <VisionTestView testId={activeTest} onBack={() => setActiveTest(null)} />;
+    return <VisionTestView testId={activeTest} onBack={() => setActiveTest(null)} onNext={handleNextTest} />;
   }
 
   return (
@@ -63,7 +85,7 @@ const VisionAssessment = () => {
   );
 };
 
-const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void }) => {
+const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: () => void; onNext: (currentTestId: number) => void }) => {
   const test = visionTests.find((t) => t.id === testId)!;
   const [selected, setSelected] = useState<number[]>([]);
   const [colorSelections, setColorSelections] = useState<Record<number, number>>({});
@@ -72,6 +94,14 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
   const [isRecording, setIsRecording] = useState(false);
   const [sceneDescriptionText, setSceneDescriptionText] = useState<string>("");
   const [sceneAccuracy, setSceneAccuracy] = useState<number | null>(null);
+  const [objectRecognitionRound, setObjectRecognitionRound] = useState(1);
+  const [objectRecognitionTargetLabel, setObjectRecognitionTargetLabel] = useState<string>("");
+  const [objectRecognitionStartTime, setObjectRecognitionStartTime] = useState<number | null>(null);
+  const [objectRecognitionRoundStartTime, setObjectRecognitionRoundStartTime] = useState<number | null>(null);
+  const [objectRecognitionRoundTimes, setObjectRecognitionRoundTimes] = useState<number[]>([]);
+  const [objectRecognitionCorrectCount, setObjectRecognitionCorrectCount] = useState(0);
+  const [objectRecognitionShowCorrect, setObjectRecognitionShowCorrect] = useState(false);
+  const [objectRecognitionMetrics, setObjectRecognitionMetrics] = useState<any>(null);
   const [dotPosition, setDotPosition] = useState({ x: 50, y: 50 });
   const [trackingResult, setTrackingResult] = useState<TrackingResult | null>(null);
   const [isTrackingComplete, setIsTrackingComplete] = useState(false);
@@ -110,6 +140,68 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
     return Math.round(accuracy);
   };
 
+  // Object Recognition: Generate random label for the round
+  const generateRandomLabel = (): string => {
+    const randomObj = OBJECTS[Math.floor(Math.random() * OBJECTS.length)];
+    return randomObj.label;
+  };
+
+  // Object Recognition: Calculate metrics from completed rounds
+  const calculateObjectRecognitionMetrics = (correctCount: number, roundTimes: number[]) => {
+    const totalTime = roundTimes.reduce((a, b) => a + b, 0);
+    const avgTimePerRound = totalTime / roundTimes.length;
+    const accuracyScore = (correctCount / 3) * 100;
+    
+    // Time score: faster times get higher scores
+    let timeScore = 100;
+    if (avgTimePerRound <= 3) timeScore = 100;
+    else if (avgTimePerRound <= 5) timeScore = 90;
+    else if (avgTimePerRound <= 10) timeScore = 80;
+    else if (avgTimePerRound <= 15) timeScore = 70;
+    else timeScore = 50;
+    
+    return {
+      correctCount,
+      totalRounds: 3,
+      accuracyScore: Math.round(accuracyScore),
+      totalTime: totalTime.toFixed(1),
+      avgTimePerRound: avgTimePerRound.toFixed(1),
+      timeScore,
+      finalScore: Math.round((accuracyScore * 0.7) + (timeScore * 0.3)),
+    };
+  };
+
+  // Object Recognition: Calculate time-based cognitive score
+  const calculateTimeScore = (responseTime: number): number => {
+    if (responseTime <= 5) return 100;
+    if (responseTime <= 10) return 80;
+    if (responseTime <= 20) return 60;
+    return 40;
+  };
+
+  // Object Recognition: Generate feedback based on metrics
+  const generateObjectRecognitionFeedback = (accuracyScore: number, timeScore: number, responseTime: number): string => {
+    const highAccuracy = accuracyScore >= 75;
+    const highSpeed = timeScore >= 80;
+    
+    if (highAccuracy && highSpeed) {
+      return "Excellent! Quick and accurate visual identification.";
+    } else if (highAccuracy && !highSpeed) {
+      return "Good visual identification. Processing speed can improve with practice.";
+    } else if (!highAccuracy && highSpeed) {
+      return "May be responding impulsively. Encourage careful observation.";
+    } else {
+      return "Needs structured guidance. Visual discrimination training recommended.";
+    }
+  };
+
+  // Object Recognition: Get cognitive speed rating
+  const getCognitiveSpeedRating = (timeScore: number): string => {
+    if (timeScore >= 80) return "Fast";
+    if (timeScore >= 60) return "Moderate";
+    return "Slow";
+  };
+
   // Handle scene description text change
   const handleSceneDescriptionChange = (text: string) => {
     setSceneDescriptionText(text);
@@ -131,6 +223,16 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
     } else if (testId === 4) {
       setSceneDescriptionText("");
       setSceneAccuracy(null);
+    } else if (testId === 1) {
+      setSelected([]);
+      setObjectRecognitionRound(1);
+      setObjectRecognitionTargetLabel(generateRandomLabel());
+      setObjectRecognitionStartTime(Date.now());
+      setObjectRecognitionRoundStartTime(Date.now());
+      setObjectRecognitionRoundTimes([]);
+      setObjectRecognitionCorrectCount(0);
+      setObjectRecognitionShowCorrect(false);
+      setObjectRecognitionMetrics(null);
     }
     setIsTestSubmitted(false);
     setTestFinalScore(0);
@@ -350,20 +452,129 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
       {/* Test Area */}
       {isObjectRecognition && (
         <div>
-          <p className="text-sm text-muted-foreground mb-4">Select all objects you can identify in the grid below:</p>
-          <div className="grid grid-cols-4 gap-3 mb-6">
-            {Array.from({ length: 8 }).map((_, i) => (
-              <button
-                key={i}
-                onClick={() => setSelected((s) => s.includes(i) ? s.filter((x) => x !== i) : [...s, i])}
-                className={`aspect-square rounded-xl border-2 flex items-center justify-center text-2xl transition-colors ${
-                  selected.includes(i) ? "border-primary bg-clinical-teal-light" : "border-border bg-muted"
-                }`}
-              >
-                {["🍎", "🚗", "📱", "🌳", "✈️", "🏠", "⌚", "📚"][i]}
-              </button>
-            ))}
-          </div>
+          {!objectRecognitionMetrics ? (
+            <>
+              <div className="mb-8">
+                <div className="flex items-center justify-between mb-6">
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-1">Round {objectRecognitionRound} of 3</p>
+                    <p className="text-sm text-foreground font-semibold">Find and select:</p>
+                  </div>
+                  <div className="text-5xl">{OBJECTS.find(obj => obj.label === objectRecognitionTargetLabel)?.emoji}</div>
+                </div>
+                <p className="text-2xl font-bold text-clinical-info capitalize text-center py-4 bg-blue-50 rounded-xl border-2 border-blue-200">
+                  {objectRecognitionTargetLabel}
+                </p>
+              </div>
+
+              {objectRecognitionShowCorrect && (
+                <div className="mb-6 p-4 bg-green-50 border-2 border-green-300 rounded-xl text-center animate-pulse">
+                  <Check className="w-8 h-8 text-clinical-success mx-auto mb-2" />
+                  <p className="text-green-700 font-semibold">Correct! ✓</p>
+                </div>
+              )}
+              
+              <div className="grid grid-cols-4 gap-3 mb-6">
+                {OBJECTS.map((obj) => {
+                  const isTarget = obj.label === objectRecognitionTargetLabel && objectRecognitionShowCorrect;
+                  return (
+                    <button
+                      key={obj.id}
+                      onClick={() => {
+                        if (!objectRecognitionRoundStartTime) {
+                          setObjectRecognitionRoundStartTime(Date.now());
+                        }
+                        
+                        if (obj.label === objectRecognitionTargetLabel) {
+                          // Correct selection
+                          const roundTime = (Date.now() - (objectRecognitionRoundStartTime || Date.now())) / 1000;
+                          setObjectRecognitionShowCorrect(true);
+                          setObjectRecognitionCorrectCount(objectRecognitionCorrectCount + 1);
+                          
+                          // Move to next round after 1.5 seconds
+                          setTimeout(() => {
+                            if (objectRecognitionRound < 3) {
+                              setObjectRecognitionRound(objectRecognitionRound + 1);
+                              setObjectRecognitionTargetLabel(generateRandomLabel());
+                              setObjectRecognitionRoundStartTime(Date.now());
+                              setObjectRecognitionShowCorrect(false);
+                              setObjectRecognitionRoundTimes([...objectRecognitionRoundTimes, roundTime]);
+                            } else {
+                              // All 3 rounds complete
+                              const finalTimes = [...objectRecognitionRoundTimes, roundTime];
+                              const metrics = calculateObjectRecognitionMetrics(objectRecognitionCorrectCount + 1, finalTimes);
+                              setObjectRecognitionMetrics(metrics);
+                            }
+                          }, 1500);
+                        }
+                      }}
+                      disabled={objectRecognitionShowCorrect}
+                      className={`aspect-square rounded-xl border-2 flex items-center justify-center text-3xl transition-all ${
+                        isTarget
+                          ? "border-clinical-success bg-green-50 ring-2 ring-clinical-success scale-110"
+                          : "border-border bg-muted hover:border-primary disabled:opacity-50"
+                      }`}
+                      title={obj.label}
+                    >
+                      {obj.emoji}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          ) : (
+            <div className="space-y-4">
+              <div className="bg-blue-50 rounded-xl p-6 border border-blue-200">
+                <h4 className="font-display font-semibold text-foreground mb-4">Label Recognition Results</h4>
+                
+                <div className="grid grid-cols-2 gap-4 mb-4">
+                  <div className="bg-white rounded-lg p-3">
+                    <p className="text-xs text-muted-foreground">Accuracy</p>
+                    <p className="text-2xl font-bold text-clinical-info">{objectRecognitionMetrics.accuracyScore}%</p>
+                    <p className="text-xs text-muted-foreground mt-1">{objectRecognitionMetrics.correctCount}/3 Correct</p>
+                  </div>
+                  <div className="bg-white rounded-lg p-3">
+                    <p className="text-xs text-muted-foreground">Total Time</p>
+                    <p className="text-2xl font-bold text-foreground">{objectRecognitionMetrics.totalTime}s</p>
+                  </div>
+                  <div className="bg-white rounded-lg p-3">
+                    <p className="text-xs text-muted-foreground">Avg Time per Round</p>
+                    <p className="text-2xl font-bold text-foreground">{objectRecognitionMetrics.avgTimePerRound}s</p>
+                  </div>
+                  <div className="bg-white rounded-lg p-3">
+                    <p className="text-xs text-muted-foreground">Speed Score</p>
+                    <p className="text-2xl font-bold text-foreground">{objectRecognitionMetrics.timeScore}%</p>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-lg p-4 mb-4">
+                  <p className="text-sm text-muted-foreground mb-2">Performance Feedback</p>
+                  <div className="space-y-2">
+                    {objectRecognitionMetrics.correctCount === 3 && objectRecognitionMetrics.avgTimePerRound <= 5 && (
+                      <p className="text-sm text-green-700 font-semibold">✓ Excellent recognition and quick response time!</p>
+                    )}
+                    {objectRecognitionMetrics.correctCount === 3 && objectRecognitionMetrics.avgTimePerRound > 5 && (
+                      <p className="text-sm text-blue-700 font-semibold">✓ All correct, but try to respond faster.</p>
+                    )}
+                    {objectRecognitionMetrics.correctCount < 3 && objectRecognitionMetrics.correctCount > 0 && (
+                      <p className="text-sm text-orange-700 font-semibold">⊝ {objectRecognitionMetrics.correctCount}/3 correct. Pay closer attention to object matching.</p>
+                    )}
+                    {objectRecognitionMetrics.correctCount === 0 && (
+                      <p className="text-sm text-red-700 font-semibold">✗ Needs more practice. Match the label carefully before selecting.</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="bg-gradient-to-r from-blue-100 to-blue-50 rounded-lg p-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-semibold text-foreground">Final Score</span>
+                    <span className="text-3xl font-bold text-clinical-info">{objectRecognitionMetrics.finalScore} / 100</span>
+                  </div>
+                  <Progress value={objectRecognitionMetrics.finalScore} className="mt-3 h-2" />
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -542,68 +753,76 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
         <div className="grid grid-cols-3 gap-4">
           <div className="text-center">
             <p className="text-2xl font-bold text-foreground">
-              {isClarity
-                ? claritySelection !== null
-                  ? "1"
-                  : "--"
-                : isColor
-                  ? colorAnswered > 0
-                    ? colorCorrect
+              {isObjectRecognition && !objectRecognitionMetrics
+                ? `${objectRecognitionRound}/3`
+                : isClarity
+                  ? claritySelection !== null
+                    ? "1"
                     : "--"
-                  : isScene
-                    ? sceneDescriptionText.length > 0
-                      ? "1"
+                  : isColor
+                    ? colorAnswered > 0
+                      ? colorCorrect
                       : "--"
-                    : isTracking && trackingResult
-                      ? trackingResult.matchCount
-                      : "--"}
+                    : isScene
+                      ? sceneDescriptionText.length > 0
+                        ? "1"
+                        : "--"
+                      : isTracking && trackingResult
+                        ? trackingResult.matchCount
+                        : "--"}
             </p>
-            <p className="text-xs text-muted-foreground">Response</p>
+            <p className="text-xs text-muted-foreground">{isObjectRecognition && !objectRecognitionMetrics ? "Round" : "Response"}</p>
           </div>
           <div className="text-center">
             <p className="text-2xl font-bold text-foreground">
-              {isClarity
-                ? claritySelection !== null
-                  ? `${clarityAccuracy}%`
-                  : "--"
-                : isColor
-                  ? colorAnswered > 0
-                    ? `${colorAccuracy}%`
+              {isObjectRecognition && !objectRecognitionMetrics
+                ? "--"
+                : isClarity
+                  ? claritySelection !== null
+                    ? `${clarityAccuracy}%`
                     : "--"
-                  : isScene
-                    ? sceneAccuracy !== null
-                      ? `${sceneAccuracy}%`
+                  : isColor
+                    ? colorAnswered > 0
+                      ? `${colorAccuracy}%`
                       : "--"
-                    : isTracking && trackingResult
-                      ? `${trackingResult.accuracyPercent}%`
-                      : "--"}
+                    : isScene
+                      ? sceneAccuracy !== null
+                        ? `${sceneAccuracy}%`
+                        : "--"
+                      : isTracking && trackingResult
+                        ? `${trackingResult.accuracyPercent}%`
+                        : "--"}
             </p>
             <p className="text-xs text-muted-foreground">Accuracy %</p>
           </div>
           <div className="text-center">
             <p className="text-2xl font-bold text-foreground">
-              {isClarity || isColor
-                ? formatTime(elapsedTime)
-                : isScene
+              {isObjectRecognition && objectRecognitionRoundStartTime
+                ? `${((Date.now() - objectRecognitionRoundStartTime) / 1000).toFixed(1)}s`
+                : isClarity || isColor
                   ? formatTime(elapsedTime)
-                  : isTracking && trackingResult
-                    ? `${trackingResult.timeTaken}s`
-                    : "--"}
+                  : isScene
+                    ? formatTime(elapsedTime)
+                    : isTracking && trackingResult
+                      ? `${trackingResult.timeTaken}s`
+                      : "--"}
             </p>
             <p className="text-xs text-muted-foreground">Time Taken</p>
           </div>
         </div>
         <Progress
           value={
-            isClarity
-              ? clarityAccuracy
-              : isColor
-                ? colorAccuracy
-                : isScene
-                  ? sceneAccuracy || 0
-                  : isTracking && trackingResult
-                    ? trackingResult.accuracyPercent
-                    : 0
+            isObjectRecognition && !objectRecognitionMetrics
+              ? (objectRecognitionCorrectCount / 3) * 100
+              : isClarity
+                ? clarityAccuracy
+                : isColor
+                  ? colorAccuracy
+                  : isScene
+                    ? sceneAccuracy || 0
+                    : isTracking && trackingResult
+                      ? trackingResult.accuracyPercent
+                      : 0
           }
           className="mt-4 h-1.5"
         />
@@ -620,41 +839,62 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
         >
           Save & Exit
         </Button>
-        <Button
-          onClick={() => {
-            // Calculate final score based on test type
-            let finalScore = 0;
-            let testName = test.title;
-            
-            if (isClarity && claritySelection !== null) {
-              finalScore = clarityAccuracy;
-            } else if (isColor && colorAnswered > 0) {
-              finalScore = colorAccuracy;
-            } else if (isScene && sceneAccuracy !== null) {
-              finalScore = sceneAccuracy;
-            } else if (isTracking && trackingResult) {
-              finalScore = trackingResult.accuracyPercent;
-            } else if (isObjectRecognition) {
-              finalScore = selected.length > 0 ? 100 : 0;
-            }
-            
-            console.log(`✓ Test Complete - ${testName} - Accuracy: ${finalScore}%`);
-            
-            // Stop timer and recording
-            if (timerIntervalRef.current) {
-              clearInterval(timerIntervalRef.current);
-              timerIntervalRef.current = null;
-            }
-            stopTracking();
-            stopRecording();
-            
-            // Show completion screen
-            setTestFinalScore(finalScore);
-            setIsTestSubmitted(true);
-          }}
-        >
-          Submit & Next Test <ChevronRight className="w-3 h-3 ml-1" />
-        </Button>
+        {!isObjectRecognition && (
+          <Button
+            onClick={() => {
+              // Calculate final score based on test type
+              let finalScore = 0;
+              let testName = test.title;
+              
+              if (isClarity && claritySelection !== null) {
+                finalScore = clarityAccuracy;
+              } else if (isColor && colorAnswered > 0) {
+                finalScore = colorAccuracy;
+              } else if (isScene && sceneAccuracy !== null) {
+                finalScore = sceneAccuracy;
+              } else if (isTracking && trackingResult) {
+                finalScore = trackingResult.accuracyPercent;
+              }
+              
+              console.log(`✓ Test Complete - ${testName} - Accuracy: ${finalScore}%`);
+              
+              // Stop timer and recording
+              if (timerIntervalRef.current) {
+                clearInterval(timerIntervalRef.current);
+                timerIntervalRef.current = null;
+              }
+              stopTracking();
+              stopRecording();
+              
+              // Show completion screen
+              setTestFinalScore(finalScore);
+              setIsTestSubmitted(true);
+            }}
+          >
+            Submit & Next Test <ChevronRight className="w-3 h-3 ml-1" />
+          </Button>
+        )}
+        {isObjectRecognition && objectRecognitionMetrics && (
+          <Button
+            onClick={() => {
+              console.log(`✓ Test Complete - ${test.title} - Accuracy: ${objectRecognitionMetrics.accuracyScore}%`);
+              
+              // Stop timer and recording
+              if (timerIntervalRef.current) {
+                clearInterval(timerIntervalRef.current);
+                timerIntervalRef.current = null;
+              }
+              stopTracking();
+              stopRecording();
+              
+              // Show completion screen
+              setTestFinalScore(objectRecognitionMetrics.finalScore);
+              setIsTestSubmitted(true);
+            }}
+          >
+            Submit & Next Test <ChevronRight className="w-3 h-3 ml-1" />
+          </Button>
+        )}
       </div>
 
       {/* Test Completion Screen */}
@@ -665,29 +905,15 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
               <div className="w-16 h-16 rounded-full bg-blue-100 flex items-center justify-center mx-auto mb-4">
                 <Check className="w-8 h-8 text-clinical-success" />
               </div>
-              <h2 className="font-display text-2xl font-bold text-foreground mb-2">Test Complete!</h2>
-              <p className="text-sm text-muted-foreground">{test.title}</p>
+             
             </div>
             
-            <div className="bg-muted rounded-xl p-6 mb-6 text-center">
-              <p className="text-xs text-muted-foreground mb-2">Your Score</p>
-              <p className="text-5xl font-bold text-clinical-info mb-2">{testFinalScore}%</p>
-              <Progress value={testFinalScore} className="h-2" />
-              <p className="text-xs text-muted-foreground mt-3">
-                {testFinalScore === 100
-                  ? "Perfect score! Excellent work!"
-                  : testFinalScore >= 80
-                    ? "Great work! You performed very well."
-                    : testFinalScore >= 60
-                      ? "Good effort! Keep practicing."
-                      : "Keep trying! You'll do better next time."}
-              </p>
-            </div>
+            
             
             <Button
               onClick={() => {
                 setIsTestSubmitted(false);
-                onBack();
+                onNext(testId);
               }}
               className="w-full"
             >
@@ -698,6 +924,6 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
       )}
     </div>
   );
-};
+}
 
 export default VisionAssessment;
