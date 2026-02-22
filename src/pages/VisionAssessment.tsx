@@ -254,7 +254,14 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
   const colorAnswered = Object.keys(colorSelections).length;
   const colorAccuracy = colorAnswered > 0 ? Math.round((colorCorrect / colorAnswered) * 100) : 0;
 
-  const clarityAccuracy = claritySelection !== null ? 100 : 0;
+  const clarityAccuracy = (() => {
+    if (claritySelection === null) return 0;
+    const maxSize = 32;
+    const minSize = 8;
+    // smaller text size -> higher score (8px -> 100%, 32px -> 0%)
+    const pct = Math.round(((maxSize - claritySelection) / (maxSize - minSize)) * 100);
+    return Math.max(0, Math.min(100, pct));
+  })();
 
   return (
     <div className="p-8 animate-fade-in">
@@ -278,7 +285,7 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
             <span className="text-sm font-medium text-foreground">
               {isClarity
                 ? claritySelection !== null
-                  ? "Score: 100%"
+                  ? `Score: ${clarityAccuracy}%`
                   : "Score: --"
                 : isColor
                   ? colorAnswered > 0
@@ -483,7 +490,7 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
             <p className="text-2xl font-bold text-foreground">
               {isClarity
                 ? claritySelection !== null
-                  ? "100%"
+                  ? `${clarityAccuracy}%`
                   : "--"
                 : isColor
                   ? colorAnswered > 0
