@@ -98,84 +98,195 @@ const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(ma
  * ---------------------------------------------
  */
 
+
+type SpeechStatus = "idle" | "starting" | "listening" | "processing" | "error";
+
 type SpeechHook = {
   supported: boolean;
   listening: boolean;
   transcript: string;
   confidence: number;
-  start: (lang?: string, onFinal?: () => void) => void;
+  error: string | null;
+  status: SpeechStatus;
+  start: (lang?: string, onFinal?: () => void, opts?: { interim?: boolean; retryOnce?: boolean }) => void;
   stop: () => void;
   reset: () => void;
 };
 
 const useSpeechRecognizer = (): SpeechHook => {
   const recognitionRef = useRef<any>(null);
+  const noSpeechTimerRef = useRef<number | null>(null);
+  const retriedRef = useRef(false);
 
   const [supported, setSupported] = useState(false);
   const [listening, setListening] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [confidence, setConfidence] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<SpeechStatus>("idle");
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const SpeechRecognition =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    setSupported(!!SpeechRecognition);
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    setSupported(!!SR);
   }, []);
 
-  const reset = () => {
-    setTranscript("");
-    setConfidence(0);
+  const clearNoSpeechTimer = () => {
+    if (noSpeechTimerRef.current) {
+      window.clearTimeout(noSpeechTimerRef.current);
+      noSpeechTimerRef.current = null;
+    }
   };
 
-  const start = (lang = "en-IN", onFinal?: () => void) => {
-    if (typeof window === "undefined") return;
-    const SpeechRecognition =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) return;
+  const reset = () => {
+    clearNoSpeechTimer();
+    retriedRef.current = false;
+    setTranscript("");
+    setConfidence(0);
+    setError(null);
+    setStatus("idle");
+  };
 
-    // stop any previous instance
+  const stop = () => {
+    clearNoSpeechTimer();
+    try {
+      recognitionRef.current?.stop?.();
+    } catch {}
+    setListening(false);
+    setStatus("idle");
+  };
+
+  const start = (
+    lang = "en-IN",
+    onFinal?: () => void,
+    opts?: { interim?: boolean; retryOnce?: boolean }
+  ) => {
+    if (typeof window === "undefined") return;
+
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) {
+      setError("Speech recognition not supported. Please type the word.");
+      setStatus("error");
+      return;
+    }
+
+    const interim = opts?.interim ?? false;       // default false (more stable)
+    const retryOnce = opts?.retryOnce ?? true;    // default true
+
+    // kill any previous instance
     try {
       recognitionRef.current?.abort?.();
     } catch {}
 
-    const recog = new SpeechRecognition();
+    const recog = new SR();
     recognitionRef.current = recog;
 
     recog.lang = lang;
-    recog.interimResults = true;
+    recog.interimResults = interim;
     recog.continuous = false;
+    recog.maxAlternatives = 1;
 
-    reset();
+    // fresh run
+    clearNoSpeechTimer();
+    setTranscript("");
+    setConfidence(0);
+    setError(null);
+    setListening(false);
+    setStatus("starting");
 
-    recog.onstart = () => setListening(true);
-    recog.onend = () => {
-      setListening(false);
-      onFinal?.();
+    // If user doesn’t speak quickly, show guidance (before browser throws no-speech)
+    noSpeechTimerRef.current = window.setTimeout(() => {
+      // Don't force stop; just guide the user
+      setError("Speak immediately after pressing Start (within 1 second)");
+    }, 1500);
+
+    recog.onstart = () => {
+      setListening(true);
+      setStatus("listening");
+      setError(null);
     };
-    recog.onerror = () => setListening(false);
+
+    recog.onspeechstart = () => {
+      clearNoSpeechTimer(); // speech actually detected
+      setError(null);
+    };
 
     recog.onresult = (e: any) => {
-      const last = e.results[e.results.length - 1][0];
-      const t = last?.transcript ?? "";
-      const c = last?.confidence ?? 0;
+      // pick the best result from the last event
+      const res = e.results[e.results.length - 1];
+      const alt = res?.[0];
+      const t = (alt?.transcript ?? "").trim();
+      const c = alt?.confidence ?? 0;
+
+      // If interim=false this will typically be final already.
       setTranscript(t);
       setConfidence(c);
+      setError(null);
+
+      if (res?.isFinal) {
+        setStatus("processing");
+        // stop shortly after final
+        setTimeout(() => {
+          try {
+            recog.stop();
+          } catch {}
+        }, 250);
+      }
     };
 
-    recog.start();
-  };
+    recog.onerror = (e: any) => {
+      clearNoSpeechTimer();
+      setListening(false);
 
-  const stop = () => {
+      const code = e?.error;
+      // Retry once on no-speech (helps a lot)
+      if (code === "no-speech" && retryOnce && !retriedRef.current) {
+        retriedRef.current = true;
+        setStatus("starting");
+        setError("No speech detected. Retrying… speak immediately.");
+        setTimeout(() => {
+          try {
+            recog.start();
+          } catch {
+            setStatus("error");
+            setError("Failed to restart speech recognition.");
+          }
+        }, 250);
+        return;
+      }
+
+      setStatus("error");
+
+      if (code === "not-allowed") {
+        setError("Microphone permission blocked. Allow mic access in browser site settings.");
+      } else if (code === "network") {
+        setError("Speech recognition needs internet in this browser. Check your connection.");
+      } else if (code === "no-speech") {
+        setError("No speech detected. Speak immediately after pressing Start.");
+      } else {
+        setError(`Speech recognition error: ${code || "unknown"}`);
+      }
+    };
+
+    recog.onend = () => {
+      clearNoSpeechTimer();
+      setListening(false);
+      // If we ended without a transcript and no hard error, show gentle guidance
+      setStatus("idle");
+      onFinal?.();
+    };
+
     try {
-      recognitionRef.current?.stop?.();
-    } catch {
-      // ignore
+      recog.start();
+    } catch (err) {
+      clearNoSpeechTimer();
+      setListening(false);
+      setStatus("error");
+      setError("Failed to start speech recognition. Try reloading or use manual typing.");
     }
-    setListening(false);
   };
 
-  return { supported, listening, transcript, confidence, start, stop, reset };
+  return { supported, listening, transcript, confidence, error, status, start, stop, reset };
 };
 
 /**
@@ -218,6 +329,74 @@ const AudioClipButton = ({
       >
         <Play className="w-4 h-4" /> {label}
       </Button>
+    </div>
+  );
+};
+
+const MicMeter = () => {
+  const [level, setLevel] = useState(0);
+  const rafRef = useRef<number | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+
+  const start = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true },
+      });
+      streamRef.current = stream;
+
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 512;
+      analyserRef.current = analyser;
+      source.connect(analyser);
+
+      const data = new Uint8Array(analyser.frequencyBinCount);
+
+      const tick = () => {
+        analyser.getByteTimeDomainData(data);
+        // compute RMS
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) {
+          const v = (data[i] - 128) / 128;
+          sum += v * v;
+        }
+        const rms = Math.sqrt(sum / data.length);
+        setLevel(Math.min(100, Math.round(rms * 200)));
+        rafRef.current = requestAnimationFrame(tick);
+      };
+      tick();
+    } catch (e) {
+      console.error("MicMeter start error:", e);
+    }
+  };
+
+  const stop = () => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = null;
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    setLevel(0);
+  };
+
+  return (
+    <div className="w-full max-w-md mx-auto p-3 rounded-lg border border-border bg-card">
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-sm font-medium">Mic Level</div>
+        <div className="text-xs text-muted-foreground">{level}/100</div>
+      </div>
+      <div className="h-2 w-full bg-muted rounded">
+        <div className="h-2 bg-primary rounded" style={{ width: `${level}%` }} />
+      </div>
+      <div className="mt-3 flex gap-2">
+        <Button size="sm" variant="outline" onClick={start}>Test Mic</Button>
+        <Button size="sm" variant="outline" onClick={stop}>Stop</Button>
+      </div>
+      <p className="text-xs text-muted-foreground mt-2">
+        Speak near the mic. The bar must move. If it stays near 0, Chrome is not getting audio.
+      </p>
     </div>
   );
 };
@@ -376,36 +555,45 @@ const HearingTestView = ({ testId, onBack }: { testId: number; onBack: () => voi
 
   const [wordScores, setWordScores] = useState<number[]>([]);
   const [finalWordScore, setFinalWordScore] = useState<number | null>(null);
+  const [manualInput, setManualInput] = useState(""); // Fallback for manual input
 
   const computeClarity = (expected: string) => {
-    const sim = similarityScore(expected, recognizer.transcript);
-    const conf = Math.round((recognizer.confidence || 0) * 100);
-    // Weighted: correctness 70%, confidence 30%
-    return clamp(Math.round(sim * 0.7 + conf * 0.3), 0, 100);
-  };
+  const expectedNorm = expected.trim().toLowerCase();
+  const inputRaw = (recognizer.transcript || manualInput || "").trim().toLowerCase();
+  if (!inputRaw) return 0;
+
+  const sim = similarityScore(expectedNorm, inputRaw); // 0..100 assumed
+  const conf = recognizer.transcript
+    ? Math.round((recognizer.confidence || 0) * 100)
+    : 85;
+
+  return clamp(Math.round(sim * 0.7 + conf * 0.3), 0, 100);
+};
 
   const nextWord = () => {
-    const clarity = computeClarity(targetWord);
+  const clarity = computeClarity(targetWord);
 
-    setWordScores((prev) => {
-      const copy = [...prev];
-      copy[wordIndex] = clarity;
-      return copy;
-    });
+  // build the updated scores safely in one place
+  const updatedScores = (() => {
+    const copy = [...wordScores];
+    copy[wordIndex] = clarity;
+    return copy;
+  })();
 
-    recognizer.reset();
+  setWordScores(updatedScores);
 
-    if (wordIndex < repetitionWords.length - 1) {
-      setWordIndex((p) => p + 1);
-    } else {
-      // final average
-      const updated = [...wordScores];
-      updated[wordIndex] = clarity;
-      const avg = Math.round(updated.reduce((a, b) => a + (b || 0), 0) / repetitionWords.length);
-      setFinalWordScore(avg);
-      setScoreDisplay(`${avg}/100`);
-    }
-  };
+  recognizer.reset();
+  setManualInput("");
+
+  if (wordIndex < repetitionWords.length - 1) {
+    setWordIndex((p) => p + 1);
+  } else {
+    const sum = updatedScores.reduce((a, b) => a + (b || 0), 0);
+    const avg = Math.round(sum / repetitionWords.length);
+    setFinalWordScore(avg);
+    setScoreDisplay(`${avg}/100`);
+  }
+};
 
   /**
    * -------------------------------
@@ -443,6 +631,7 @@ const HearingTestView = ({ testId, onBack }: { testId: number; onBack: () => voi
     setWordIndex(0);
     setWordScores([]);
     setFinalWordScore(null);
+    setManualInput("");
 
     // Reset speech
     recognizer.reset();
@@ -645,48 +834,94 @@ const HearingTestView = ({ testId, onBack }: { testId: number; onBack: () => voi
             <p className="text-sm text-muted-foreground mb-2">Say this word clearly:</p>
             <p className="font-display text-3xl font-bold text-foreground">"{targetWord}"</p>
             <p className="text-xs text-muted-foreground mt-2">
-              Recognition: <span className="font-medium">{recognizer.transcript || "--"}</span>
+              Recognition: <span className="font-medium">{recognizer.transcript || manualInput || "--"}</span>
             </p>
           </div>
 
           <div className="bg-muted rounded-xl p-8 flex flex-col items-center gap-4">
-            <Button
-              onClick={() => recognizer.start("en-IN")}
-              variant={recognizer.listening ? "destructive" : "default"}
-              size="lg"
-              className="gap-2"
-              disabled={!recognizer.supported}
-            >
-              {recognizer.listening ? (
-                <>
-                  <Square className="w-4 h-4" /> Listening…
-                </>
-              ) : (
-                <>
-                  <Mic className="w-4 h-4" /> Start
-                </>
-              )}
-            </Button>
+           <Button
+  onClick={() => {
+    if (recognizer.listening) recognizer.stop();
+    else recognizer.start("en-IN", undefined, { interim: false, retryOnce: true });
+  }}
+  variant={recognizer.listening ? "destructive" : "default"}
+  size="lg"
+  className="gap-2"
+  disabled={!recognizer.supported}
+>
+  {recognizer.listening ? (
+    <>
+      <Square className="w-4 h-4" /> Stop
+    </>
+  ) : (
+    <>
+      <Mic className="w-4 h-4" /> Start
+    </>
+  )}
+</Button>
 
-            {!recognizer.supported && (
-              <p className="text-xs text-red-500">
-                Speech recognition not supported here. Use Chrome on desktop/mobile.
-              </p>
+            {recognizer.listening && (
+  <div className="flex items-center gap-3">
+    <div className="w-3 h-3 rounded-full bg-destructive animate-pulse" />
+    <span className="text-sm font-medium text-foreground">Listening... Speak now</span>
+  </div>
+)}
+
+            {recognizer.error && (
+              <div className="w-full text-center">
+                <p className="text-xs text-red-600 mb-3 font-medium">
+                  ⚠️ {recognizer.error}
+                </p>
+                <p className="text-xs text-muted-foreground mb-3">
+                  
+                </p>
+                
+              </div>
+            )}
+
+            {!recognizer.supported && !recognizer.error && (
+              <div className="w-full text-center">
+                <p className="text-xs text-amber-600 mb-3">
+                  Speech recognition not available. Use manual input below:
+                </p>
+                <input
+                  type="text"
+                  placeholder={`Type: ${targetWord}`}
+                  value={manualInput}
+                  onChange={(e) => setManualInput(e.target.value)}
+                  className="w-full px-3 py-2 border border-border rounded-lg bg-card text-foreground placeholder:text-muted-foreground text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+              </div>
             )}
           </div>
 
           <div className="mt-4 grid grid-cols-2 gap-4">
-            <div className="text-center p-3 bg-muted rounded-lg">
-              <p className="text-lg font-bold text-foreground">
-                {recognizer.transcript ? computeClarity(targetWord) : "--"}
+            <div className="text-center p-4 bg-muted rounded-lg border border-border">
+              <p className="text-2xl font-bold text-foreground">
+                {recognizer.transcript || manualInput ? (
+                  <span className={computeClarity(targetWord) >= 70 ? "text-emerald-600" : "text-amber-600"}>
+                    {computeClarity(targetWord)}
+                  </span>
+                ) : "--"}
               </p>
-              <p className="text-xs text-muted-foreground">Clarity Score (0–100)</p>
+              <p className="text-xs text-muted-foreground mt-1">Clarity Score (0–100)</p>
+              {(recognizer.transcript || manualInput) && (
+                <p className="text-xs text-muted-foreground mt-2">
+                  You said: <span className="font-medium">{recognizer.transcript || manualInput}</span>
+                </p>
+              )}
             </div>
-            <div className="text-center p-3 bg-muted rounded-lg">
-              <p className="text-lg font-bold text-foreground">
-                {recognizer.transcript ? Math.round((recognizer.confidence || 0) * 100) : "--"}
+            <div className="text-center p-4 bg-muted rounded-lg border border-border">
+              <p className="text-2xl font-bold text-foreground">
+                {recognizer.transcript ? (
+                  <span className={Math.round((recognizer.confidence || 0) * 100) >= 70 ? "text-emerald-600" : "text-amber-600"}>
+                    {Math.round((recognizer.confidence || 0) * 100)}%
+                  </span>
+                ) : manualInput ? (
+                  <span className="text-emerald-600">85%</span>
+                ) : "--"}
               </p>
-              <p className="text-xs text-muted-foreground">Recognition Confidence</p>
+              <p className="text-xs text-muted-foreground">Confidence</p>
             </div>
           </div>
 
@@ -694,7 +929,7 @@ const HearingTestView = ({ testId, onBack }: { testId: number; onBack: () => voi
             <p className="text-sm text-muted-foreground">
               Word {wordIndex + 1} / {repetitionWords.length}
             </p>
-            <Button onClick={nextWord} disabled={!recognizer.transcript}>
+            <Button onClick={nextWord} disabled={!recognizer.transcript && !manualInput}>
               {wordIndex === repetitionWords.length - 1 ? "Finish" : "Next"}
               <ChevronRight className="w-3 h-3 ml-1" />
             </Button>
@@ -723,23 +958,26 @@ const HearingTestView = ({ testId, onBack }: { testId: number; onBack: () => voi
           </div>
 
           <div className="bg-muted rounded-xl p-8 flex flex-col items-center gap-4">
-            <Button
-              onClick={() => recognizer.start("en-IN")}
-              variant={recognizer.listening ? "destructive" : "default"}
-              size="lg"
-              className="gap-2"
-              disabled={!recognizer.supported}
-            >
-              {recognizer.listening ? (
-                <>
-                  <Square className="w-4 h-4" /> Listening…
-                </>
-              ) : (
-                <>
-                  <Mic className="w-4 h-4" /> Start
-                </>
-              )}
-            </Button>
+           <Button
+  onClick={() => {
+    if (recognizer.listening) recognizer.stop();
+    else recognizer.start("en-IN", undefined, { interim: false, retryOnce: true });
+  }}
+  variant={recognizer.listening ? "destructive" : "default"}
+  size="lg"
+  className="gap-2"
+  disabled={!recognizer.supported}
+>
+  {recognizer.listening ? (
+    <>
+      <Square className="w-4 h-4" /> Stop
+    </>
+  ) : (
+    <>
+      <Mic className="w-4 h-4" /> Start
+    </>
+  )}
+</Button>
 
             {!recognizer.supported && (
               <p className="text-xs text-red-500">
@@ -770,6 +1008,7 @@ const HearingTestView = ({ testId, onBack }: { testId: number; onBack: () => voi
           </p>
         </div>
       )}
+      
 
       {/* Footer controls */}
       <div className="mt-6 flex gap-3">
