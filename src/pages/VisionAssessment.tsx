@@ -32,8 +32,10 @@ const visionTests = [
   { id: 2, title: "Visual Clarity Test", desc: "Read text at decreasing font sizes", time: "4 min" },
   { id: 3, title: "Color Differentiation Test", desc: "Identify mismatched colors in pattern grids", time: "5 min" },
   { id: 4, title: "Scene Description Test", desc: "Describe real-life environment images", time: "6 min" },
-  { id: 5, title: "Visual Tracking Simulation", desc: "Track moving objects with focus accuracy", time: "5 min" },
+  { id: 5, title: "Vision Reading & Behavioral Tracking", desc: "Advanced reading assessment with behavioral tracking", time: "5 min" },
 ];
+
+const READING_PARAGRAPH = "The sun was setting behind the distant mountains, casting a golden hue over the entire valley. In the middle of this peaceful landscape, a small stream gurgled as it wound its way through the lush green meadows. Birds were chirping their final songs of the day before retreating to their nests. It was a moment of absolute tranquility, where time seemed to stand still and the worries of the world faded into the background.";
 
 const VisionAssessment = () => {
   const [activeTest, setActiveTest] = useState<number | null>(null);
@@ -114,9 +116,22 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
   const [isTrackingComplete, setIsTrackingComplete] = useState(false);
   const [isTestSubmitted, setIsTestSubmitted] = useState(false);
   const [testFinalScore, setTestFinalScore] = useState<number>(0);
+
+  // New States for Vision Reading Assessment
+  const [calibrationStatus, setCalibrationStatus] = useState("Initializing...");
+  const [isCalibrated, setIsCalibrated] = useState(false);
+  const [processedFrame, setProcessedFrame] = useState<string | null>(null);
+  const [readingPhase, setReadingPhase] = useState(false);
+  const [readingInput, setReadingInput] = useState("");
+  const [visionMetrics, setVisionMetrics] = useState<any>(null);
+  const [trackingData, setTrackingData] = useState<any[]>([]);
+  const [faceDistance, setFaceDistance] = useState(0);
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const processingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const dotAnimationRef = useRef<number | null>(null);
   const dotPositionRef = useRef({ x: 50, y: 50 });
 
@@ -135,7 +150,7 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
       { keywords: ["football", "soccer", "ball", "playing"], weight: 0.25 },
       { keywords: ["field", "grass", "ground", "pitch", "outdoor"], weight: 0.25 },
     ];
-    
+
     let accuracy = 0;
     keyElements.forEach(element => {
       const hasKeyword = element.keywords.some(keyword => lowerText.includes(keyword));
@@ -143,7 +158,7 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
         accuracy += element.weight * 100;
       }
     });
-    
+
     return Math.round(accuracy);
   };
 
@@ -164,24 +179,24 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
     const totalTime = roundTimes.reduce((a, b) => a + b, 0);
     const avgTimePerRound = totalTime / roundTimes.length;
     const accuracyScore = (correctCount / (correctCount + wrongCount || 1)) * 100;
-    
+
     // Inclusive neurodiversity-friendly scoring
     // Baseline: μ (mean) = 1.2 sec, σ (std deviation) = 0.5 sec
     // Generous baseline accommodates typical development, ASD, ADHD, and mild ID
     const speedBaseline_mu = 1.2; // seconds - healthy baseline for age 6-12
     const speedBaseline_sigma = 0.5; // seconds - allowed variation
-    
+
     // Calculate Speed Index using exponential function
     // Speed Index = 100 × exp(-(T - μ) / σ)
     // This gives full points for baseline speed, penalizes very slow responses gently
     const speedDifference = (avgTimePerRound - speedBaseline_mu) / speedBaseline_sigma;
     const speedIndex = Math.max(0, Math.min(100, 100 * Math.exp(-speedDifference)));
-    
+
     // Inclusive scoring formula: 75% Accuracy + 25% Speed
     // Accuracy is dominant to support children with processing delays
     // Speed is secondary modifier to encourage improvement
     const finalScore = Math.round((accuracyScore * 0.75) + (speedIndex * 0.25));
-    
+
     return {
       correctCount,
       totalRounds: 3,
@@ -205,7 +220,7 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
   const generateObjectRecognitionFeedback = (accuracyScore: number, timeScore: number, responseTime: number): string => {
     const highAccuracy = accuracyScore >= 75;
     const highSpeed = timeScore >= 80;
-    
+
     if (highAccuracy && highSpeed) {
       return "Excellent! Quick and accurate visual identification.";
     } else if (highAccuracy && !highSpeed) {
@@ -269,6 +284,27 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
 
   const getDotPosition = useCallback(() => dotPositionRef.current, []);
 
+  const captureFrame = useCallback(() => {
+    if (!videoRef.current || !canvasRef.current) return null;
+
+    const video = videoRef.current;
+
+    // 🚨 VERY IMPORTANT FIX
+    if (video.videoWidth === 0 || video.videoHeight === 0) {
+      return null; // video not ready yet
+    }
+
+    const canvas = canvasRef.current;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", 0.7);
+  }, []);
+
   const stopRecording = useCallback(() => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
@@ -282,214 +318,96 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
       clearInterval(timerIntervalRef.current);
       timerIntervalRef.current = null;
     }
+    if (processingIntervalRef.current) {
+      clearInterval(processingIntervalRef.current);
+      processingIntervalRef.current = null;
+    }
   }, []);
-
-  const handleTrackingComplete = useCallback(
-    (result: TrackingResult) => {
-      setTrackingResult(result);
-      setIsTrackingComplete(true);
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-        streamRef.current = null;
-      }
-      if (videoRef.current) {
-        videoRef.current.srcObject = null;
-      }
-      setIsRecording(false);
-      if (timerIntervalRef.current) {
-        clearInterval(timerIntervalRef.current);
-        timerIntervalRef.current = null;
-      }
-    },
-    []
-  );
-
-  const { startTracking, stopTracking, completeWithCurrentResult } = useEyeTracking(
-    videoRef,
-    getDotPosition,
-    isRecording && isTracking && !isTrackingComplete,
-    handleTrackingComplete
-  );
-
-  // Start timer and camera recording for Visual Tracking Simulation
-  useEffect(() => {
-    if (isTracking && !streamRef.current) {
-      startRecording();
-    }
-
-    return () => {
-      if (!isTracking) {
-        stopTracking();
-        stopRecording();
-      }
-    };
-  }, [isTracking]);
-
-  // Timer effect: 20-second countdown for tracking, elapsed for scene tests
-  useEffect(() => {
-    if (isRecording && isTracking && !isTrackingComplete) {
-      timerIntervalRef.current = setInterval(() => {
-        setElapsedTime((prev) => {
-          if (prev >= TRACKING_DURATION_SEC - 1) {
-            return TRACKING_DURATION_SEC;
-          }
-          return prev + 1;
-        });
-      }, 1000);
-    } else if (isScene) {
-      timerIntervalRef.current = setInterval(() => {
-        setElapsedTime((prev) => prev + 1);
-      }, 1000);
-    } else {
-      if (timerIntervalRef.current) {
-        clearInterval(timerIntervalRef.current);
-        timerIntervalRef.current = null;
-      }
-    }
-
-    return () => {
-      if (timerIntervalRef.current) {
-        clearInterval(timerIntervalRef.current);
-      }
-    };
-  }, [isRecording, isTracking, isTrackingComplete, isScene]);
-
-  // Timer effect for Object Recognition rounds
-  useEffect(() => {
-    if (isObjectRecognition && objectRecognitionRoundStartTime && !objectRecognitionMetrics) {
-      timerIntervalRef.current = setInterval(() => {
-        setObjectRecognitionCurrentRoundTime(() => {
-          const elapsed = (Date.now() - (objectRecognitionRoundStartTime || Date.now())) / 1000;
-          return elapsed;
-        });
-      }, 100);
-    } else {
-      if (timerIntervalRef.current) {
-        clearInterval(timerIntervalRef.current);
-        timerIntervalRef.current = null;
-      }
-    }
-
-    return () => {
-      if (timerIntervalRef.current) {
-        clearInterval(timerIntervalRef.current);
-      }
-    };
-  }, [isObjectRecognition, objectRecognitionRoundStartTime, objectRecognitionMetrics]);
-
-  // Timer effect for Clarity test
-  useEffect(() => {
-    if (isClarity && clarityStartTime && claritySelections.length > 0) {
-      timerIntervalRef.current = setInterval(() => {
-        setClarityCurrentTime(() => {
-          const elapsed = (Date.now() - (clarityStartTime || Date.now())) / 1000;
-          return elapsed;
-        });
-      }, 100);
-    } else {
-      if (timerIntervalRef.current) {
-        clearInterval(timerIntervalRef.current);
-        timerIntervalRef.current = null;
-      }
-    }
-
-    return () => {
-      if (timerIntervalRef.current) {
-        clearInterval(timerIntervalRef.current);
-      }
-    };
-  }, [isClarity, clarityStartTime, claritySelections]);
-
-  // Timer effect for Color Differentiation test
-  useEffect(() => {
-    if (isColor) {
-      const colorStartTime = Date.now();
-      timerIntervalRef.current = setInterval(() => {
-        setElapsedTime(() => {
-          const elapsed = (Date.now() - colorStartTime) / 1000;
-          return Math.floor(elapsed);
-        });
-      }, 100);
-    } else {
-      if (timerIntervalRef.current) {
-        clearInterval(timerIntervalRef.current);
-        timerIntervalRef.current = null;
-      }
-    }
-
-    return () => {
-      if (timerIntervalRef.current) {
-        clearInterval(timerIntervalRef.current);
-      }
-    };
-  }, [isColor]);
-
-  // Auto-submit when 20 seconds reached - stop dot, show result
-  useEffect(() => {
-    if (isTracking && isRecording && elapsedTime >= TRACKING_DURATION_SEC && !isTrackingComplete) {
-      completeWithCurrentResult(elapsedTime);
-    }
-  }, [elapsedTime, isTracking, isRecording, isTrackingComplete, completeWithCurrentResult]);
-
-  // Moving dot animation for Visual Tracking
-  useEffect(() => {
-    if (isRecording && isTracking && !isTrackingComplete) {
-      let startTime = Date.now();
-      const animate = () => {
-        const elapsed = (Date.now() - startTime) / 1000;
-        const pos = {
-          x: 50 + Math.sin(elapsed * 0.5) * 30,
-          y: 50 + Math.cos(elapsed * 0.7) * 20,
-        };
-        dotPositionRef.current = pos;
-        setDotPosition(pos);
-        dotAnimationRef.current = requestAnimationFrame(animate);
-      };
-      dotAnimationRef.current = requestAnimationFrame(animate);
-    } else {
-      if (dotAnimationRef.current) {
-        cancelAnimationFrame(dotAnimationRef.current);
-        dotAnimationRef.current = null;
-      }
-    }
-
-    return () => {
-      if (dotAnimationRef.current) {
-        cancelAnimationFrame(dotAnimationRef.current);
-      }
-    };
-  }, [isRecording, isTracking, isTrackingComplete]);
-
-  const startRecording = useCallback(async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user" },
-        audio: false,
-      });
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play();
-      }
-
-      streamRef.current = stream;
-      setIsRecording(true);
-      setElapsedTime(0);
-      setTrackingResult(null);
-      setIsTrackingComplete(false);
-      // Start eye tracking after video is ready
-      setTimeout(() => startTracking(), 500);
-    } catch (error) {
-      console.error("Error accessing camera:", error);
-      alert("Unable to access camera. Please ensure camera permissions are granted.");
-    }
-  }, [startTracking]);
 
   const formatTime = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
   };
+
+  const handleTrackingComplete = useCallback(
+    (result: TrackingResult) => {
+      setTrackingResult(result);
+      setIsTrackingComplete(true);
+      stopRecording();
+    },
+    [stopRecording]
+  );
+
+  const { startTracking, stopTracking, completeWithCurrentResult } = useEyeTracking(
+    videoRef,
+    getDotPosition,
+    isRecording && isTracking && testId === 5 && !isTrackingComplete, // Only for old style if needed, but we renamed 5
+    handleTrackingComplete
+  );
+
+  const sendFrameToBackend = useCallback(async () => {
+    const frame = captureFrame();
+    if (!frame) return;
+
+    try {
+      const response = await fetch("http://localhost:8000/vision/process-frame", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ frame }),
+      });
+      const data = await response.json();
+      setProcessedFrame(data.processed_frame);
+      setCalibrationStatus(data.calibration_status);
+      setFaceDistance(data.distance);
+
+      if (data.calibration_status === "Calibration complete") {
+        setIsCalibrated(true);
+      } else {
+        setIsCalibrated(false);
+      }
+
+      if (readingPhase) {
+        setTrackingData((prev) => [...prev, {
+          distance: data.distance,
+          pose: data.head_pose,
+          timestamp: Date.now()
+        }]);
+      }
+    } catch (err) {
+      console.error("Error sending frame:", err);
+    }
+  }, [captureFrame, readingPhase]);
+
+  const startRecording = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: false,
+      });
+
+      if (!videoRef.current) return;
+
+      videoRef.current.srcObject = stream;
+      streamRef.current = stream;
+
+      await videoRef.current.play();
+
+      setIsRecording(true);
+      setCalibrationStatus("Initializing camera...");
+
+      // 🚨 VERY IMPORTANT FIX
+      // Wait until video is ready before sending frames
+      videoRef.current.onloadedmetadata = () => {
+        processingIntervalRef.current = setInterval(sendFrameToBackend, 300);
+      };
+
+    } catch (error) {
+      console.error("Camera error:", error);
+      alert("Please allow camera permission.");
+    }
+  }, [sendFrameToBackend]);
+
 
   const colorCorrect = Object.keys(colorSelections).filter(
     (ri) => colorSelections[Number(ri)] === COLOR_ROWS[Number(ri)].oddIndex
@@ -505,8 +423,90 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
     return Math.round(totalScore);
   })();
 
+
+
+  // New useEffect for Vision Reading Assessment flow
+  useEffect(() => {
+    if (testId === 5 && isRecording && isCalibrated && !readingPhase) {
+      // Auto transition to reading phase after calibration
+      const timer = setTimeout(() => {
+        setReadingPhase(true);
+        setElapsedTime(0);
+        setTrackingData([]);
+        // Start timer for reading phase
+        timerIntervalRef.current = setInterval(() => {
+          setElapsedTime((prev) => prev + 1);
+        }, 1000);
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [testId, isRecording, isCalibrated, readingPhase]);
+
+  // Existing timers
+  useEffect(() => {
+    if (isScene) {
+      timerIntervalRef.current = setInterval(() => {
+        setElapsedTime((prev) => prev + 1);
+      }, 1000);
+    }
+    return () => {
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    };
+  }, [isScene]);
+
+  useEffect(() => {
+    if (isObjectRecognition && objectRecognitionRoundStartTime && !objectRecognitionMetrics) {
+      timerIntervalRef.current = setInterval(() => {
+        setObjectRecognitionCurrentRoundTime(() => (Date.now() - (objectRecognitionRoundStartTime || Date.now())) / 1000);
+      }, 100);
+    }
+    return () => {
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    };
+  }, [isObjectRecognition, objectRecognitionRoundStartTime, objectRecognitionMetrics]);
+
+  useEffect(() => {
+    if (isClarity && clarityStartTime && claritySelections.length > 0) {
+      timerIntervalRef.current = setInterval(() => {
+        setClarityCurrentTime(() => (Date.now() - (clarityStartTime || Date.now())) / 1000);
+      }, 100);
+    }
+    return () => {
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    };
+  }, [isClarity, clarityStartTime, claritySelections]);
+
+  const handleFinalSubmit = async () => {
+    stopRecording();
+
+    // Calculate metrics based on tracking data
+    const stabilityScore = 100 - (trackingData.length > 0 ? Math.min(40, trackingData.length / 2) : 0); // Simplified
+    const movementScore = 100 - (trackingData.length > 0 ? Math.min(30, trackingData.length / 3) : 0); // Simplified
+
+    try {
+      const response = await fetch("http://localhost:8000/vision/final-score", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          original_text: READING_PARAGRAPH,
+          typed_text: readingInput,
+          time_taken: elapsedTime,
+          stability_metrics: stabilityScore,
+          movement_metrics: movementScore
+        }),
+      });
+      const data = await response.json();
+      setVisionMetrics(data);
+      setTestFinalScore(data.final_vision_disability_score);
+      setIsTestSubmitted(true);
+    } catch (err) {
+      console.error("Error submitting final score:", err);
+    }
+  };
+
   return (
     <div className="p-4 animate-fade-in">
+      <canvas ref={canvasRef} style={{ display: 'none' }} />
       <button onClick={onBack} className="text-sm text-primary hover:underline mb-2 block">← Back to tests</button>
       <div className="flex items-center justify-between mb-3">
         <div>
@@ -519,11 +519,7 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
               <div className="clinical-card px-4 py-2 flex items-center gap-2">
                 <Clock className="w-4 h-4 text-muted-foreground" />
                 <span className="text-sm font-medium text-foreground">
-                  {isTracking && isRecording && !isTrackingComplete
-                    ? formatTime(Math.max(0, TRACKING_DURATION_SEC - elapsedTime))
-                    : isScene || isClarity || isColor
-                      ? formatTime(elapsedTime)
-                      : formatTime(elapsedTime)}
+                  {formatTime(elapsedTime)}
                 </span>
               </div>
               <div className="clinical-card px-4 py-2 flex items-center gap-2">
@@ -541,8 +537,8 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
                         ? sceneAccuracy !== null
                           ? `Score: ${sceneAccuracy}%`
                           : "Score: --"
-                        : trackingResult
-                          ? `Score: ${trackingResult.accuracyPercent}%`
+                        : visionMetrics
+                          ? `Score: ${visionMetrics.final_vision_disability_score}%`
                           : "Score: --"}
                 </span>
               </div>
@@ -560,7 +556,7 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
                 <p className="text-xs text-muted-foreground mb-0.5">Find the label:</p>
                 <p className="text-xl font-bold text-clinical-info uppercase tracking-wide">{objectRecognitionTargetLabel}</p>
               </div>
-              
+
               <div className="mb-3">
                 <div className="flex items-center justify-between">
                   <div>
@@ -583,7 +579,7 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
                   <p className="text-sm text-red-700 font-semibold">✗ Wrong! Try again</p>
                 </div>
               )}
-              
+
               <div className="grid grid-cols-4 gap-2 mb-3">
                 {OBJECTS.map((obj) => {
                   const isTarget = obj.label === objectRecognitionTargetLabel && objectRecognitionShowCorrect;
@@ -595,13 +591,13 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
                         if (!objectRecognitionRoundStartTime) {
                           setObjectRecognitionRoundStartTime(Date.now());
                         }
-                        
+
                         if (obj.label === objectRecognitionTargetLabel) {
                           // Correct selection
                           const roundTime = (Date.now() - (objectRecognitionRoundStartTime || Date.now())) / 1000;
                           setObjectRecognitionShowCorrect(true);
                           setObjectRecognitionCorrectCount(objectRecognitionCorrectCount + 1);
-                          
+
                           // Move to next round after 1.5 seconds
                           setTimeout(() => {
                             if (objectRecognitionRound < 3) {
@@ -624,7 +620,7 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
                           setObjectRecognitionWrongCount(objectRecognitionWrongCount + 1);
                           setObjectRecognitionShowWrong(true);
                           setObjectRecognitionWrongId(obj.id);
-                          
+
                           // Hide wrong feedback after 1 second
                           setTimeout(() => {
                             setObjectRecognitionShowWrong(false);
@@ -633,13 +629,12 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
                         }
                       }}
                       disabled={objectRecognitionShowCorrect || objectRecognitionShowWrong}
-                      className={`aspect-square rounded-lg border-2 flex items-center justify-center text-2xl transition-all ${
-                        isTarget
-                          ? "border-clinical-success bg-green-50 ring-2 ring-clinical-success scale-105"
-                          : isWrong
-                            ? "border-destructive bg-red-50 ring-2 ring-destructive scale-95"
-                            : "border-border bg-muted hover:border-primary disabled:opacity-50"
-                      }`}
+                      className={`aspect-square rounded-lg border-2 flex items-center justify-center text-2xl transition-all ${isTarget
+                        ? "border-clinical-success bg-green-50 ring-2 ring-clinical-success scale-105"
+                        : isWrong
+                          ? "border-destructive bg-red-50 ring-2 ring-destructive scale-95"
+                          : "border-border bg-muted hover:border-primary disabled:opacity-50"
+                        }`}
                       title={obj.label}
                     >
                       {obj.emoji}
@@ -652,7 +647,7 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
             <div className="space-y-4">
               <div className="bg-blue-50 rounded-xl p-6 border border-blue-200">
                 <h4 className="font-display font-semibold text-foreground mb-4">Label Recognition Results</h4>
-                
+
                 <div className="grid grid-cols-2 gap-4 mb-4">
                   <div className="bg-white rounded-lg p-3">
                     <p className="text-xs text-muted-foreground">Accuracy</p>
@@ -663,7 +658,7 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
                     <p className="text-xs text-muted-foreground">Avg Time/Object</p>
                     <p className="text-2xl font-bold text-foreground">{objectRecognitionMetrics.avgTimePerRound}s</p>
                   </div>
-                
+
                   <div className="bg-white rounded-lg p-3">
                     <p className="text-xs text-muted-foreground">Total Time</p>
                     <p className="text-2xl font-bold text-foreground">{objectRecognitionMetrics.totalTime}s</p>
@@ -672,13 +667,12 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
 
                 {/* Inclusive Performance Feedback */}
 
-
                 <div className="bg-gradient-to-r from-blue-100 to-blue-50 rounded-lg p-4">
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-semibold text-foreground">Final Score (Inclusive Scoring)</span>
                     <span className="text-3xl font-bold text-clinical-info">{objectRecognitionMetrics.finalScore} </span>
                   </div>
-                
+
                 </div>
               </div>
             </div>
@@ -689,7 +683,7 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
       {isClarity && (
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground mb-4">Select all sizes you can comfortably read. The score increases as you select more readable sizes! Click &quot;I can read this&quot;:</p>
-          
+
           {/* Live Score Display */}
           <div className="bg-gradient-to-r from-blue-50 to-blue-100 rounded-lg p-4 border border-blue-200 mb-4">
             <div className="flex items-center justify-between">
@@ -697,7 +691,7 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
               <span className="text-3xl font-bold text-clinical-info">{clarityAccuracy}%</span>
             </div>
             <div className="w-full bg-blue-200 rounded-full h-2 mt-2">
-              <div 
+              <div
                 className="bg-clinical-success h-2 rounded-full transition-all duration-300"
                 style={{ width: `${clarityAccuracy}%` }}
               />
@@ -718,13 +712,12 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
             const isSelected = claritySelections.includes(size);
             const weightPerSize = 100 / 6; // 16.67% per font size
             const possibleScore = Math.round(weightPerSize);
-            
+
             return (
               <div
                 key={size}
-                className={`clinical-card p-4 flex items-center justify-between transition-all ${
-                  isSelected ? "ring-2 ring-clinical-success border-clinical-success bg-green-50" : "hover:border-primary"
-                }`}
+                className={`clinical-card p-4 flex items-center justify-between transition-all ${isSelected ? "ring-2 ring-clinical-success border-clinical-success bg-green-50" : "hover:border-primary"
+                  }`}
               >
                 <div className="flex-1">
                   <span style={{ fontSize: size }} className="text-foreground block mb-2">
@@ -742,7 +735,7 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
                     if (claritySelections.length === 0 && !clarityStartTime) {
                       setClarityStartTime(Date.now());
                     }
-                    
+
                     setClaritySelections((prev) =>
                       prev.includes(size)
                         ? prev.filter((s) => s !== size)
@@ -776,13 +769,12 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
                         onClick={() =>
                           setColorSelections((prev) => ({ ...prev, [ri]: ci }))
                         }
-                      className={`w-12 h-12 rounded-lg border-2 transition-colors ${
-                          isSelected
-                            ? isCorrect
-                              ? "border-clinical-success ring-2 ring-clinical-success"
-                              : "border-destructive ring-2 ring-destructive"
-                            : "border-border hover:border-primary"
-                        }`}
+                        className={`w-12 h-12 rounded-lg border-2 transition-colors ${isSelected
+                          ? isCorrect
+                            ? "border-clinical-success ring-2 ring-clinical-success"
+                            : "border-destructive ring-2 ring-destructive"
+                          : "border-border hover:border-primary"
+                          }`}
                         style={{ backgroundColor: c }}
                       />
                     );
@@ -807,8 +799,8 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
         <div>
           <p className="text-sm text-muted-foreground mb-4"></p>
           <div className="clinical-card p-0 mb-3 rounded-lg overflow-hidden h-98 flex items-center justify-center bg-muted">
-            <img 
-              src="/Images/image.png" 
+            <img
+              src="/Images/image.png"
               alt="Scene description test image"
               className="w-108 h-108 object-cover"
             />
@@ -822,17 +814,14 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
           />
           {sceneAccuracy !== null && (
             <div className="mt-4 p-4 bg-blue-50 rounded-xl border border-blue-200">
-              
-              
-
               <p className="text-xs text-blue-700 mt-2">
                 {sceneAccuracy === 100
                   ? "Perfect! You identified all key elements."
                   : sceneAccuracy >= 75
-                  ? "Great! You identified most key elements."
-                  : sceneAccuracy >= 50
-                  ? "Good! You identified several key elements."
-                  : "Keep looking for more details in the scene."}
+                    ? "Great! You identified most key elements."
+                    : sceneAccuracy >= 50
+                      ? "Good! You identified several key elements."
+                      : "Keep looking for more details in the scene."}
               </p>
             </div>
           )}
@@ -840,68 +829,116 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
       )}
 
       {isTracking && (
-        <div>
-          <p className="text-sm text-muted-foreground mb-4">
-            {isTrackingComplete
-              ? "Test complete. Your tracking accuracy has been recorded below."
-              : "Follow the moving dot with your eyes and turn your head slightly toward it. Your face is being recorded for analysis."}
-          </p>
-          <div className="clinical-card bg-muted rounded-xl h-96 flex items-center justify-center relative overflow-hidden">
-            {isTrackingComplete ? (
-              <div className="text-center p-8">
-                <Check className="w-16 h-16 text-clinical-success mx-auto mb-4" />
-                <p className="font-display font-semibold text-foreground text-lg mb-2">Visual Tracking Complete</p>
-                <p className="text-sm text-muted-foreground mb-4">
-                  Accuracy: {trackingResult?.accuracyPercent ?? 0}% · {trackingResult?.matchCount ?? 0} correct samples
-                </p>
-                <p className="text-xs text-muted-foreground">See Response Accuracy panel below for full results.</p>
-              </div>
-            ) : isRecording ? (
-              <>
-                <video
-                  ref={videoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className="w-full h-full object-cover rounded-xl"
-                />
-                <div className="absolute top-4 left-4 flex items-center gap-2 bg-black/50 px-3 py-1.5 rounded-lg">
-                  <div className="w-3 h-3 rounded-full bg-destructive animate-pulse-soft" />
-                  <span className="text-xs text-white font-medium">Recording</span>
+        <div className="space-y-6">
+          <div className="grid grid-cols-2 gap-6">
+            <div className="clinical-card bg-muted rounded-xl h-96 flex items-center justify-center relative overflow-hidden">
+              {!isRecording ? (
+                <div className="text-center p-8">
+                  <Video className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                  <p className="text-sm text-muted-foreground">Camera starting...</p>
+                  <Button onClick={startRecording} className="mt-4">Start Camera</Button>
                 </div>
-                <div className="absolute top-4 right-4 bg-black/50 px-3 py-1.5 rounded-lg">
-                  <span className="text-xs text-white font-medium">
-                    {formatTime(Math.max(0, TRACKING_DURATION_SEC - elapsedTime))}
-                  </span>
-                </div>
-                <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 bg-black/50 px-4 py-2 rounded-lg">
-                  <p className="text-xs text-white">
-                    Focus accuracy: {trackingResult ? `${trackingResult.accuracyPercent}%` : "--"}
+              ) : (
+                <>
+                  {processedFrame ? (
+                      <img
+                        src={processedFrame}
+                        className="w-full h-full object-cover rounded-xl"
+                        alt="Processed Frame"
+                      />
+                    ) : (
+                      <div className="absolute inset-0 flex items-center justify-center text-white text-sm">
+                        Starting camera...
+                      </div>
+                  )}
+                  <video ref={videoRef} autoPlay playsInline muted className="hidden" />
+                  <div className="absolute top-4 left-4 flex items-center gap-2 bg-black/50 px-3 py-1.5 rounded-lg">
+                    <div className={`w-3 h-3 rounded-full ${isCalibrated ? 'bg-clinical-success' : 'bg-destructive'} animate-pulse`} />
+                    <span className="text-xs text-white font-medium">{calibrationStatus}</span>
+                  </div>
+                  <div className="absolute top-4 right-4 bg-black/50 px-3 py-1.5 rounded-lg">
+                    <span className="text-xs text-white font-medium">Dist: {faceDistance}cm</span>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="clinical-card p-6 flex flex-col justify-center">
+              <h3 className="font-display font-bold text-xl mb-4">
+                {readingPhase ? "Reading Phase" : "Calibration Phase"}
+              </h3>
+
+              {!readingPhase ? (
+                <div className="space-y-4">
+                  <p className="text-sm text-muted-foreground">
+                    Please position yourself 45-60cm from the screen and align your face in the center of the camera.
                   </p>
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-xs">
+                      <span>Calibration Progress</span>
+                      <span>{isCalibrated ? "100%" : "Waiting..."}</span>
+                    </div>
+                    <Progress value={isCalibrated ? 100 : 20} className="h-2" />
+                  </div>
+                  {isCalibrated && (
+                    <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-green-700 text-sm animate-fade-in">
+                      ✓ Calibration complete! Starting reading phase in a moment...
+                    </div>
+                  )}
                 </div>
-                {/* Moving dot overlay */}
-                <div
-                  className="absolute w-6 h-6 rounded-full bg-primary shadow-lg pointer-events-none z-10"
-                  style={{
-                    top: `${dotPosition.y}%`,
-                    left: `${dotPosition.x}%`,
-                    transform: "translate(-50%, -50%)",
-                    transition: "all 0.1s ease-out",
-                  }}
-                />
-              </>
-            ) : (
-              <div className="text-center text-muted-foreground">
-                <Video className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                <p className="text-sm">Starting camera...</p>
-              </div>
-            )}
+              ) : (
+                <div className="space-y-4 animate-fade-in">
+                  <div className="bg-white p-4 rounded-lg border border-border shadow-sm">
+                    <p className="text-lg leading-relaxed text-foreground select-none">
+                      {READING_PARAGRAPH}
+                    </p>
+                  </div>
+                  <textarea
+                    className="w-full p-4 rounded-xl border border-border bg-card text-sm text-foreground resize-none focus:outline-none focus:ring-2 focus:ring-ring"
+                    rows={4}
+                    placeholder="Type the text you see above..."
+                    value={readingInput}
+                    onChange={(e) => setReadingInput(e.target.value)}
+                  />
+                  <Button onClick={handleFinalSubmit} className="w-full">Submit Reading</Button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
 
-      {/* Response Accuracy Panel */}
-      {!isObjectRecognition && (
+      {/* Response Accuracy Panel Replacement for new test results */}
+      {isTracking && visionMetrics && (
+        <div className="mt-8 clinical-card p-5 animate-fade-in">
+          <h4 className="font-display font-semibold text-sm text-foreground mb-4">Vision Assessment Results</h4>
+          <div className="grid grid-cols-4 gap-4">
+            <div className="text-center p-3 bg-blue-50 rounded-lg">
+              <p className="text-2xl font-bold text-clinical-info">{visionMetrics.reading_accuracy}%</p>
+              <p className="text-xs text-muted-foreground">Reading Accuracy</p>
+            </div>
+            <div className="text-center p-3 bg-blue-50 rounded-lg">
+              <p className="text-2xl font-bold text-clinical-info">{visionMetrics.behavioral_stability}%</p>
+              <p className="text-xs text-muted-foreground">Behavioral Stability</p>
+            </div>
+            <div className="text-center p-3 bg-blue-50 rounded-lg">
+              <p className="text-2xl font-bold text-clinical-info">{visionMetrics.movement_score}%</p>
+              <p className="text-xs text-muted-foreground">Movement Score</p>
+            </div>
+            <div className="text-center p-3 bg-clinical-info/10 rounded-lg">
+              <p className="text-2xl font-bold text-clinical-info">{visionMetrics.final_vision_disability_score}</p>
+              <p className="text-xs text-muted-foreground">Total Disability Score</p>
+            </div>
+          </div>
+          <div className="mt-4 p-4 bg-clinical-info/5 rounded-xl border border-clinical-info/20">
+            <p className="text-sm font-semibold text-clinical-info mb-1">Interpretation:</p>
+            <p className="text-sm text-foreground italic">"{visionMetrics.interpretation}"</p>
+          </div>
+        </div>
+      )}
+
+      {/* Response Accuracy Panel - Hidden for new tracking test which has its own panel */}
+      {!isObjectRecognition && !visionMetrics && (
         <div className="mt-8 clinical-card p-5">
           <h4 className="font-display font-semibold text-sm text-foreground mb-3">Response Accuracy</h4>
           {isObjectRecognition && !objectRecognitionMetrics && (
@@ -911,84 +948,84 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
             </div>
           )}
           <div className="grid grid-cols-3 gap-4">
-          <div className="text-center">
-            <p className="text-2xl font-bold text-foreground">
-              {isObjectRecognition && !objectRecognitionMetrics
-                ? `${objectRecognitionRound}/3`
-                : isClarity
-                  ? claritySelections.length > 0
-                    ? `${claritySelections.length}`
-                    : "--"
-                  : isColor
-                    ? colorAnswered > 0
-                      ? colorCorrect
+            <div className="text-center">
+              <p className="text-2xl font-bold text-foreground">
+                {isObjectRecognition && !objectRecognitionMetrics
+                  ? `${objectRecognitionRound}/3`
+                  : isClarity
+                    ? claritySelections.length > 0
+                      ? `${claritySelections.length}`
                       : "--"
-                    : isScene
-                      ? sceneDescriptionText.length > 0
-                        ? "1"
+                    : isColor
+                      ? colorAnswered > 0
+                        ? colorCorrect
                         : "--"
-                      : isTracking && trackingResult
-                        ? trackingResult.matchCount
-                        : "--"}
-            </p>
-            <p className="text-xs text-muted-foreground">{isObjectRecognition && !objectRecognitionMetrics ? "Round" : "Response"}</p>
-          </div>
-          <div className="text-center">
-            <p className="text-2xl font-bold text-foreground">
-              {isObjectRecognition && !objectRecognitionMetrics
-                ? `${Math.round((objectRecognitionCorrectCount / (objectRecognitionCorrectCount + objectRecognitionWrongCount || 1)) * 100)}%`
-                : isClarity
-                  ? claritySelections.length > 0
-                    ? `${clarityAccuracy}%`
-                    : "--"
-                  : isColor
-                    ? colorAnswered > 0
-                      ? `${colorAccuracy}%`
+                      : isScene
+                        ? sceneDescriptionText.length > 0
+                          ? "1"
+                          : "--"
+                        : isTracking && trackingResult
+                          ? trackingResult.matchCount
+                          : "--"}
+              </p>
+              <p className="text-xs text-muted-foreground">{isObjectRecognition && !objectRecognitionMetrics ? "Round" : "Response"}</p>
+            </div>
+            <div className="text-center">
+              <p className="text-2xl font-bold text-foreground">
+                {isObjectRecognition && !objectRecognitionMetrics
+                  ? `${Math.round((objectRecognitionCorrectCount / (objectRecognitionCorrectCount + objectRecognitionWrongCount || 1)) * 100)}%`
+                  : isClarity
+                    ? claritySelections.length > 0
+                      ? `${clarityAccuracy}%`
                       : "--"
-                    : isScene
-                      ? sceneAccuracy !== null
-                        ? `${sceneAccuracy}%`
+                    : isColor
+                      ? colorAnswered > 0
+                        ? `${colorAccuracy}%`
                         : "--"
-                      : isTracking && trackingResult
-                        ? `${trackingResult.accuracyPercent}%`
-                        : "--"}
-            </p>
-            <p className="text-xs text-muted-foreground">Accuracy %</p>
-          </div>
-          <div className="text-center">
-            <p className="text-2xl font-bold text-foreground">
-              {isObjectRecognition && objectRecognitionCurrentRoundTime
-                ? `${objectRecognitionCurrentRoundTime.toFixed(1)}s`
-                : isClarity && clarityCurrentTime
-                  ? `${clarityCurrentTime.toFixed(1)}s`
-                  : isColor
-                    ? formatTime(elapsedTime)
-                    : isScene
+                      : isScene
+                        ? sceneAccuracy !== null
+                          ? `${sceneAccuracy}%`
+                          : "--"
+                        : isTracking && trackingResult
+                          ? `${trackingResult.accuracyPercent}%`
+                          : "--"}
+              </p>
+              <p className="text-xs text-muted-foreground">Accuracy %</p>
+            </div>
+            <div className="text-center">
+              <p className="text-2xl font-bold text-foreground">
+                {isObjectRecognition && objectRecognitionCurrentRoundTime
+                  ? `${objectRecognitionCurrentRoundTime.toFixed(1)}s`
+                  : isClarity && clarityCurrentTime
+                    ? `${clarityCurrentTime.toFixed(1)}s`
+                    : isColor
                       ? formatTime(elapsedTime)
-                      : isTracking && trackingResult
-                        ? `${trackingResult.timeTaken}s`
-                        : "--"}
-            </p>
-            <p className="text-xs text-muted-foreground">Time Taken</p>
+                      : isScene
+                        ? formatTime(elapsedTime)
+                        : isTracking && trackingResult
+                          ? `${trackingResult.timeTaken}s`
+                          : "--"}
+              </p>
+              <p className="text-xs text-muted-foreground">Time Taken</p>
+            </div>
           </div>
+          <Progress
+            value={
+              isObjectRecognition && !objectRecognitionMetrics
+                ? (objectRecognitionCorrectCount / (objectRecognitionCorrectCount + objectRecognitionWrongCount || 1)) * 100
+                : isClarity
+                  ? clarityAccuracy
+                  : isColor
+                    ? colorAccuracy
+                    : isScene
+                      ? sceneAccuracy || 0
+                      : isTracking && trackingResult
+                        ? trackingResult.accuracyPercent
+                        : 0
+            }
+            className="mt-4 h-1.5"
+          />
         </div>
-        <Progress
-          value={
-            isObjectRecognition && !objectRecognitionMetrics
-              ? (objectRecognitionCorrectCount / (objectRecognitionCorrectCount + objectRecognitionWrongCount || 1)) * 100
-              : isClarity
-                ? clarityAccuracy
-                : isColor
-                  ? colorAccuracy
-                  : isScene
-                    ? sceneAccuracy || 0
-                    : isTracking && trackingResult
-                      ? trackingResult.accuracyPercent
-                      : 0
-          }
-          className="mt-4 h-1.5"
-        />
-      </div>
       )}
 
       <div className="mt-3 flex gap-2">
@@ -1005,10 +1042,17 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
         {!isObjectRecognition && (
           <Button
             onClick={() => {
-              // Calculate final score based on test type
+              // For the new vision assessment, we already handle submission via handleFinalSubmit
+              if (testId === 5 && visionMetrics) {
+                setTestFinalScore(visionMetrics.final_vision_disability_score);
+                setIsTestSubmitted(true);
+                return;
+              }
+
+              // Calculate final score based on test type (existing tests)
               let finalScore = 0;
               let testName = test.title;
-              
+
               if (isClarity && claritySelections.length > 0) {
                 finalScore = clarityAccuracy;
               } else if (isColor && colorAnswered > 0) {
@@ -1018,9 +1062,9 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
               } else if (isTracking && trackingResult) {
                 finalScore = trackingResult.accuracyPercent;
               }
-              
+
               console.log(`✓ Test Complete - ${testName} - Accuracy: ${finalScore}%`);
-              
+
               // Stop timer and recording
               if (timerIntervalRef.current) {
                 clearInterval(timerIntervalRef.current);
@@ -1028,11 +1072,12 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
               }
               stopTracking();
               stopRecording();
-              
+
               // Show completion screen
               setTestFinalScore(finalScore);
               setIsTestSubmitted(true);
             }}
+            disabled={testId === 5 && !visionMetrics}
           >
             Submit & Next Test <ChevronRight className="w-3 h-3 ml-1" />
           </Button>
@@ -1041,7 +1086,7 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
           <Button
             onClick={() => {
               console.log(`✓ Test Complete - ${test.title} - Accuracy: ${objectRecognitionMetrics.accuracyScore}%`);
-              
+
               // Stop timer and recording
               if (timerIntervalRef.current) {
                 clearInterval(timerIntervalRef.current);
@@ -1049,7 +1094,7 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
               }
               stopTracking();
               stopRecording();
-              
+
               // Show completion screen
               setTestFinalScore(objectRecognitionMetrics.finalScore);
               setIsTestSubmitted(true);
@@ -1068,11 +1113,11 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
               <div className="w-16 h-16 rounded-full bg-blue-100 flex items-center justify-center mx-auto mb-4">
                 <Check className="w-8 h-8 text-clinical-success" />
               </div>
-             
+
             </div>
-            
-            
-            
+
+
+
             <Button
               onClick={() => {
                 setIsTestSubmitted(false);

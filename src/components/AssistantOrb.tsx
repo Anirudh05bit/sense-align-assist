@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react';
 
 interface AssistantOrbProps {
-  state: 'idle' | 'greeting' | 'connecting' | 'listening' | 'processing' | 'speaking' | 'vision_file' | 'vision_processing' | 'vision_asr';
+  state: 'idle' | 'greeting' | 'listening' | 'processing' | 'speaking' | 'vision_file' | 'vision_processing' | 'vision_asr';
 }
 
 const AssistantOrb: React.FC<AssistantOrbProps> = ({ state }) => {

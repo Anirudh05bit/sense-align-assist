@@ -25,7 +25,6 @@ export enum MessageType {
   GREETING = "greeting",
   SILENT_FOLLOWUP = "silent_followup",
   TEXT_MESSAGE = "text_message",
-  PDF_UPLOAD = "pdf_upload",
 
   // Session storage message types
   SAVE_SESSION = "save_session",
@@ -43,10 +42,13 @@ export enum MessageType {
 
   // Vision processing message types
   VISION_FILE_UPLOAD = "vision_file_upload",
-  VISION_IMAGE = "vision_image",
   VISION_FILE_UPLOAD_RESULT = "vision_file_upload_result",
   VISION_PROCESSING = "vision_processing",
-  VISION_READY = "vision_ready"
+  VISION_READY = "vision_ready",
+
+  // Video transcription + summary
+  VIDEO_PROCESS = "video_process",
+  VIDEO_RESULT = "video_result"
 }
 
 // Session interface
@@ -65,7 +67,7 @@ export interface Session {
 }
 
 // Event types
-export type WebSocketEventType =
+type WebSocketEventType =
   | 'open'
   | 'close'
   | 'error'
@@ -91,7 +93,8 @@ export type WebSocketEventType =
   | 'vision_settings_updated'
   | 'vision_file_upload_result'
   | 'vision_processing'
-  | 'vision_ready';
+  | 'vision_ready'
+  | 'video_result';
 
 // WebSocket state
 export enum ConnectionState {
@@ -118,19 +121,25 @@ export class WebSocketService {
   private listeners: EventListener[] = [];
   private pingInterval: number | null = null;
   private connectionState: ConnectionState = ConnectionState.DISCONNECTED;
-  // Helper promise used to wait until connection opens
-  private openWaiters: Array<() => void> = [];
 
   // Track states that should prevent interrupt signals
   private isInGreetingFlow: boolean = false;
 
   constructor(
-    url: string = 'ws://localhost:8001/ws',
+    url: string = '',
     autoReconnect: boolean = true,
     reconnectInterval: number = 3000,
     maxReconnectAttempts: number = 5
   ) {
-    this.url = url;
+    // Determine URL from environment or fallback
+    if (!url) {
+      const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8003';
+      // Convert http/https to ws/wss
+      this.url = baseUrl.replace(/^http/, 'ws') + '/ws';
+    } else {
+      this.url = url;
+    }
+
     this.autoReconnect = autoReconnect;
     this.reconnectInterval = reconnectInterval;
     this.reconnectAttempts = 0;
@@ -141,13 +150,11 @@ export class WebSocketService {
    * Connect to the WebSocket server
    */
   public connect(): void {
-    const state = this.socket?.readyState;
-    if (this.socket && (state === WebSocket.OPEN || state === WebSocket.CONNECTING)) {
-      console.log(`[WebSocketService] Already connected/connecting (state: ${state})`);
+    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
+      console.log('WebSocket already connected or connecting');
       return;
     }
 
-    console.log(`[WebSocketService] Connecting to ${this.url}...`);
     this.setConnectionState(ConnectionState.CONNECTING);
 
     try {
@@ -157,8 +164,6 @@ export class WebSocketService {
       this.socket.onclose = this.onClose.bind(this);
       this.socket.onerror = this.onError.bind(this);
       this.socket.onmessage = this.onMessage.bind(this);
-      // reset any previous open waiters
-      this.openWaiters = [];
     } catch (error) {
       console.error('WebSocket connection error:', error);
       this.setConnectionState(ConnectionState.ERROR);
@@ -335,20 +340,31 @@ export class WebSocketService {
    * @param imageData Base64-encoded image data
    */
   public sendVisionImage(imageData: string): boolean {
-    // Backend expects message type "vision_image" with field `image`
-    return this.send(MessageType.VISION_IMAGE, {
-      image: imageData
+    return this.send(MessageType.VISION_FILE_UPLOAD, {
+      image_data: imageData
     });
   }
 
   /**
-   * Send a PDF for text extraction and reading
-   * 
-   * @param pdfData Base64-encoded PDF data
+   * Send a video URL for transcription and summary.
    */
-  public sendPdf(pdfData: string): boolean {
-    return this.send(MessageType.PDF_UPLOAD, {
-      pdf: pdfData
+  public sendVideoUrl(videoUrl: string): boolean {
+    if (!videoUrl || !videoUrl.trim()) return false;
+
+    return this.send(MessageType.VIDEO_PROCESS, {
+      video_url: videoUrl.trim()
+    });
+  }
+
+  /**
+   * Send a base64-encoded video file for transcription and summary.
+   */
+  public sendVideoFile(videoData: string, fileName?: string): boolean {
+    if (!videoData || !videoData.trim()) return false;
+
+    return this.send(MessageType.VIDEO_PROCESS, {
+      video_data: videoData,
+      file_name: fileName || 'uploaded_video'
     });
   }
 
@@ -459,7 +475,7 @@ export class WebSocketService {
     this.reconnectAttempts = 0;
 
     // Set up ping interval to keep connection alive
-    this.pingInterval = window.setInterval(() => {
+    this.pingInterval = setInterval(() => {
       if (this.socket && this.socket.readyState === WebSocket.OPEN) {
         this.send(MessageType.PING);
       }
@@ -467,13 +483,6 @@ export class WebSocketService {
 
     // Notify listeners
     this.notifyListeners('open', { event });
-
-    // resolve any waiters waiting for open
-    try {
-      this.openWaiters.forEach(fn => fn());
-    } finally {
-      this.openWaiters = [];
-    }
   }
 
   /**
@@ -491,9 +500,6 @@ export class WebSocketService {
     // Notify listeners
     this.notifyListeners('close', { event });
 
-    // clear open waiters (they will be handled by reconnect attempts)
-    this.openWaiters = [];
-
     // Attempt to reconnect if enabled
     this.handleReconnect();
   }
@@ -507,37 +513,6 @@ export class WebSocketService {
 
     // Notify listeners
     this.notifyListeners('error', { event });
-    // clear any waiters so callers don't hang
-    this.openWaiters = [];
-  }
-
-  /**
-   * Wait for the WebSocket to be open. Resolves true if opened before timeout, false otherwise.
-   */
-  public waitForOpen(timeoutMs: number = 5000): Promise<boolean> {
-    if (this.connectionState === ConnectionState.CONNECTED) return Promise.resolve(true);
-
-    return new Promise<boolean>((resolve) => {
-      let resolved = false;
-
-      const onOpen = () => {
-        if (!resolved) {
-          resolved = true;
-          resolve(true);
-        }
-      };
-
-      this.openWaiters.push(onOpen);
-
-      setTimeout(() => {
-        if (!resolved) {
-          resolved = true;
-          // remove the waiter if still present
-          this.openWaiters = this.openWaiters.filter(fn => fn !== onOpen);
-          resolve(false);
-        }
-      }, timeoutMs);
-    });
   }
 
   /**

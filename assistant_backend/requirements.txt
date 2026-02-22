@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+openai
+groq
+whisper
+torch
+transformers
+pillow
+requests
+gtts
+python-multipart
+pdfplumber
+pytesseract

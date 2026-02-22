@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routes.analyze import router as analyze_router
 from routes.assessment import router as assessment_router
+from routes.vision_tracking import router as vision_router
 
 app = FastAPI(title="Medical Report Analyzer")
 
@@ -14,6 +15,7 @@ app.add_middleware(
 )
 
 app.include_router(assessment_router, prefix="/assessment")
+app.include_router(vision_router, prefix="/vision")
 app.include_router(analyze_router)
 
 
