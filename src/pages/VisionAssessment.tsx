@@ -160,10 +160,10 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
   };
 
   // Object Recognition: Calculate metrics from completed rounds
-  const calculateObjectRecognitionMetrics = (correctCount: number, roundTimes: number[]) => {
+  const calculateObjectRecognitionMetrics = (correctCount: number, roundTimes: number[], wrongCount: number = 0) => {
     const totalTime = roundTimes.reduce((a, b) => a + b, 0);
     const avgTimePerRound = totalTime / roundTimes.length;
-    const accuracyScore = (correctCount / 3) * 100;
+    const accuracyScore = (correctCount / (correctCount + wrongCount || 1)) * 100;
     
     // Inclusive neurodiversity-friendly scoring
     // Baseline: μ (mean) = 1.2 sec, σ (std deviation) = 0.5 sec
@@ -591,7 +591,7 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
                             } else {
                               // All 3 rounds complete
                               const finalTimes = [...objectRecognitionRoundTimes, roundTime];
-                              const metrics = calculateObjectRecognitionMetrics(objectRecognitionCorrectCount + 1, finalTimes);
+                              const metrics = calculateObjectRecognitionMetrics(objectRecognitionCorrectCount + 1, finalTimes, objectRecognitionWrongCount);
                               setObjectRecognitionMetrics(metrics);
                             }
                           }, 1500);
@@ -639,10 +639,7 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
                     <p className="text-xs text-muted-foreground">Avg Time/Object</p>
                     <p className="text-2xl font-bold text-foreground">{objectRecognitionMetrics.avgTimePerRound}s</p>
                   </div>
-                  <div className="bg-white rounded-lg p-3">
-                    <p className="text-xs text-muted-foreground">Processing Index</p>
-                    <p className="text-2xl font-bold text-foreground">{objectRecognitionMetrics.speedIndex}%</p>
-                  </div>
+                
                   <div className="bg-white rounded-lg p-3">
                     <p className="text-xs text-muted-foreground">Total Time</p>
                     <p className="text-2xl font-bold text-foreground">{objectRecognitionMetrics.totalTime}s</p>
@@ -650,32 +647,14 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
                 </div>
 
                 {/* Inclusive Performance Feedback */}
-                <div className="bg-white rounded-lg p-4 mb-4 border-l-4 border-clinical-info">
-                  <p className="text-sm font-semibold text-foreground mb-2">Performance Summary:</p>
-                  <p className="text-sm text-foreground leading-relaxed">
-                    {objectRecognitionMetrics.accuracyScore === 100
-                      ? "🌟 Excellent! Perfect accuracy on all labels. Strong visual recognition skills."
-                      : objectRecognitionMetrics.accuracyScore >= 90
-                        ? "✓ Very strong performance! Accurate label recognition with consistent responses."
-                        : objectRecognitionMetrics.accuracyScore >= 75
-                          ? "✓ Good performance. You're recognizing most labels correctly."
-                          : objectRecognitionMetrics.accuracyScore >= 60
-                            ? "✓ Making progress. Keep practicing to improve accuracy."
-                            : "Keep practicing label matching. Each attempt builds recognition skills!"}
-                  </p>
-                  {objectRecognitionMetrics.speedIndex < 50 && objectRecognitionMetrics.accuracyScore > 70 && (
-                    <p className="text-xs text-muted-foreground mt-2 italic">
-                      💡 Processing at a comfortable pace. Speed often improves with practice and familiarity.
-                    </p>
-                  )}
-                </div>
+
 
                 <div className="bg-gradient-to-r from-blue-100 to-blue-50 rounded-lg p-4">
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-semibold text-foreground">Final Score (Inclusive Scoring)</span>
                     <span className="text-3xl font-bold text-clinical-info">{objectRecognitionMetrics.finalScore} </span>
                   </div>
-                  <p className="text-xs text-muted-foreground mt-2">75% Accuracy + 25% Processing Speed | Baseline: 1.2s/object</p>
+                
                 </div>
               </div>
             </div>
