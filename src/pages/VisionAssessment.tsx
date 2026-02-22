@@ -3,6 +3,7 @@ import { Eye, Check, Clock, ChevronRight, BarChart2, Video } from "lucide-react"
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { useEyeTracking, type TrackingResult } from "@/hooks/useEyeTracking";
+import umagepng from "../public/image.png";
 
 const TRACKING_DURATION_SEC = 20;
 
@@ -69,9 +70,13 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
   const [claritySelection, setClaritySelection] = useState<number | null>(null);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [isRecording, setIsRecording] = useState(false);
+  const [sceneDescriptionText, setSceneDescriptionText] = useState<string>("");
+  const [sceneAccuracy, setSceneAccuracy] = useState<number | null>(null);
   const [dotPosition, setDotPosition] = useState({ x: 50, y: 50 });
   const [trackingResult, setTrackingResult] = useState<TrackingResult | null>(null);
   const [isTrackingComplete, setIsTrackingComplete] = useState(false);
+  const [isTestSubmitted, setIsTestSubmitted] = useState(false);
+  const [testFinalScore, setTestFinalScore] = useState<number>(0);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -84,6 +89,38 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
   const isScene = testId === 4;
   const isTracking = testId === 5;
 
+  // Calculate scene description accuracy based on key elements
+  const calculateSceneAccuracy = (text: string): number => {
+    const lowerText = text.toLowerCase();
+    const keyElements = [
+      { keywords: ["women", "mothers", "mother", "female", "lady", "ladies"], weight: 0.25 },
+      { keywords: ["children", "kids", "kid", "boys", "girls", "child"], weight: 0.25 },
+      { keywords: ["football", "soccer", "ball", "playing"], weight: 0.25 },
+      { keywords: ["field", "grass", "ground", "pitch", "outdoor"], weight: 0.25 },
+    ];
+    
+    let accuracy = 0;
+    keyElements.forEach(element => {
+      const hasKeyword = element.keywords.some(keyword => lowerText.includes(keyword));
+      if (hasKeyword) {
+        accuracy += element.weight * 100;
+      }
+    });
+    
+    return Math.round(accuracy);
+  };
+
+  // Handle scene description text change
+  const handleSceneDescriptionChange = (text: string) => {
+    setSceneDescriptionText(text);
+    if (text.trim().length > 0) {
+      const accuracy = calculateSceneAccuracy(text);
+      setSceneAccuracy(accuracy);
+    } else {
+      setSceneAccuracy(null);
+    }
+  };
+
   useEffect(() => {
     if (testId === 2) {
       setClaritySelection(null);
@@ -91,7 +128,12 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
     } else if (testId === 3) {
       setColorSelections({});
       setElapsedTime(0);
+    } else if (testId === 4) {
+      setSceneDescriptionText("");
+      setSceneAccuracy(null);
     }
+    setIsTestSubmitted(false);
+    setTestFinalScore(0);
   }, [testId]);
 
   const getDotPosition = useCallback(() => dotPositionRef.current, []);
@@ -163,7 +205,7 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
           return prev + 1;
         });
       }, 1000);
-    } else if (isColor || isClarity) {
+    } else if (isColor || isClarity || isScene) {
       timerIntervalRef.current = setInterval(() => {
         setElapsedTime((prev) => prev + 1);
       }, 1000);
@@ -179,7 +221,7 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
         clearInterval(timerIntervalRef.current);
       }
     };
-  }, [isRecording, isTracking, isTrackingComplete, isColor, isClarity]);
+  }, [isRecording, isTracking, isTrackingComplete, isColor, isClarity, isScene]);
 
   // Auto-submit when 20 seconds reached - stop dot, show result
   useEffect(() => {
@@ -277,7 +319,9 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
             <span className="text-sm font-medium text-foreground">
               {isTracking && isRecording && !isTrackingComplete
                 ? formatTime(Math.max(0, TRACKING_DURATION_SEC - elapsedTime))
-                : formatTime(elapsedTime)}
+                : isScene || isClarity || isColor
+                  ? formatTime(elapsedTime)
+                  : formatTime(elapsedTime)}
             </span>
           </div>
           <div className="clinical-card px-4 py-2 flex items-center gap-2">
@@ -291,9 +335,13 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
                   ? colorAnswered > 0
                     ? `Score: ${colorAccuracy}%`
                     : "Score: --"
-                  : trackingResult
-                    ? `Score: ${trackingResult.accuracyPercent}%`
-                    : "Score: --"}
+                  : isScene
+                    ? sceneAccuracy !== null
+                      ? `Score: ${sceneAccuracy}%`
+                      : "Score: --"
+                    : trackingResult
+                      ? `Score: ${trackingResult.accuracyPercent}%`
+                      : "Score: --"}
             </span>
           </div>
         </div>
@@ -393,15 +441,37 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
 
       {isScene && (
         <div>
-          <p className="text-sm text-muted-foreground mb-4">Describe what you see in the image below:</p>
-          <div className="clinical-card p-8 bg-muted mb-4 text-center text-muted-foreground text-sm rounded-xl h-48 flex items-center justify-center">
-            [Scene image placeholder — real environment image will be displayed here]
+          <p className="text-sm text-muted-foreground mb-4"></p>
+          <div className="clinical-card p-0 mb-4 rounded-xl overflow-hidden h-96 flex items-center justify-center bg-muted">
+            <img 
+              src="/Images/image.png" 
+              alt="Scene description test image"
+              className="w-full h-full object-cover"
+            />
           </div>
           <textarea
             className="w-full p-4 rounded-xl border border-border bg-card text-sm text-foreground resize-none focus:outline-none focus:ring-2 focus:ring-ring"
             rows={4}
             placeholder="Type your description of the scene..."
+            value={sceneDescriptionText}
+            onChange={(e) => handleSceneDescriptionChange(e.target.value)}
           />
+          {sceneAccuracy !== null && (
+            <div className="mt-4 p-4 bg-blue-50 rounded-xl border border-blue-200">
+              
+              
+
+              <p className="text-xs text-blue-700 mt-2">
+                {sceneAccuracy === 100
+                  ? "Perfect! You identified all key elements."
+                  : sceneAccuracy >= 75
+                  ? "Great! You identified most key elements."
+                  : sceneAccuracy >= 50
+                  ? "Good! You identified several key elements."
+                  : "Keep looking for more details in the scene."}
+              </p>
+            </div>
+          )}
         </div>
       )}
 
@@ -480,11 +550,15 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
                   ? colorAnswered > 0
                     ? colorCorrect
                     : "--"
-                  : isTracking && trackingResult
-                    ? trackingResult.matchCount
-                    : "--"}
+                  : isScene
+                    ? sceneDescriptionText.length > 0
+                      ? "1"
+                      : "--"
+                    : isTracking && trackingResult
+                      ? trackingResult.matchCount
+                      : "--"}
             </p>
-            <p className="text-xs text-muted-foreground">Correct</p>
+            <p className="text-xs text-muted-foreground">Response</p>
           </div>
           <div className="text-center">
             <p className="text-2xl font-bold text-foreground">
@@ -496,9 +570,13 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
                   ? colorAnswered > 0
                     ? `${colorAccuracy}%`
                     : "--"
-                  : isTracking && trackingResult
-                    ? `${trackingResult.accuracyPercent}%`
-                    : "--"}
+                  : isScene
+                    ? sceneAccuracy !== null
+                      ? `${sceneAccuracy}%`
+                      : "--"
+                    : isTracking && trackingResult
+                      ? `${trackingResult.accuracyPercent}%`
+                      : "--"}
             </p>
             <p className="text-xs text-muted-foreground">Accuracy %</p>
           </div>
@@ -506,9 +584,11 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
             <p className="text-2xl font-bold text-foreground">
               {isClarity || isColor
                 ? formatTime(elapsedTime)
-                : isTracking && trackingResult
-                  ? `${trackingResult.timeTaken}s`
-                  : "--"}
+                : isScene
+                  ? formatTime(elapsedTime)
+                  : isTracking && trackingResult
+                    ? `${trackingResult.timeTaken}s`
+                    : "--"}
             </p>
             <p className="text-xs text-muted-foreground">Time Taken</p>
           </div>
@@ -519,9 +599,11 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
               ? clarityAccuracy
               : isColor
                 ? colorAccuracy
-                : isTracking && trackingResult
-                  ? trackingResult.accuracyPercent
-                  : 0
+                : isScene
+                  ? sceneAccuracy || 0
+                  : isTracking && trackingResult
+                    ? trackingResult.accuracyPercent
+                    : 0
           }
           className="mt-4 h-1.5"
         />
@@ -540,13 +622,80 @@ const VisionTestView = ({ testId, onBack }: { testId: number; onBack: () => void
         </Button>
         <Button
           onClick={() => {
+            // Calculate final score based on test type
+            let finalScore = 0;
+            let testName = test.title;
+            
+            if (isClarity && claritySelection !== null) {
+              finalScore = clarityAccuracy;
+            } else if (isColor && colorAnswered > 0) {
+              finalScore = colorAccuracy;
+            } else if (isScene && sceneAccuracy !== null) {
+              finalScore = sceneAccuracy;
+            } else if (isTracking && trackingResult) {
+              finalScore = trackingResult.accuracyPercent;
+            } else if (isObjectRecognition) {
+              finalScore = selected.length > 0 ? 100 : 0;
+            }
+            
+            console.log(`✓ Test Complete - ${testName} - Accuracy: ${finalScore}%`);
+            
+            // Stop timer and recording
+            if (timerIntervalRef.current) {
+              clearInterval(timerIntervalRef.current);
+              timerIntervalRef.current = null;
+            }
             stopTracking();
             stopRecording();
+            
+            // Show completion screen
+            setTestFinalScore(finalScore);
+            setIsTestSubmitted(true);
           }}
         >
           Submit & Next Test <ChevronRight className="w-3 h-3 ml-1" />
         </Button>
       </div>
+
+      {/* Test Completion Screen */}
+      {isTestSubmitted && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-fade-in">
+          <div className="bg-card rounded-2xl p-8 max-w-md w-full mx-4 clinical-card shadow-2xl">
+            <div className="text-center mb-6">
+              <div className="w-16 h-16 rounded-full bg-blue-100 flex items-center justify-center mx-auto mb-4">
+                <Check className="w-8 h-8 text-clinical-success" />
+              </div>
+              <h2 className="font-display text-2xl font-bold text-foreground mb-2">Test Complete!</h2>
+              <p className="text-sm text-muted-foreground">{test.title}</p>
+            </div>
+            
+            <div className="bg-muted rounded-xl p-6 mb-6 text-center">
+              <p className="text-xs text-muted-foreground mb-2">Your Score</p>
+              <p className="text-5xl font-bold text-clinical-info mb-2">{testFinalScore}%</p>
+              <Progress value={testFinalScore} className="h-2" />
+              <p className="text-xs text-muted-foreground mt-3">
+                {testFinalScore === 100
+                  ? "Perfect score! Excellent work!"
+                  : testFinalScore >= 80
+                    ? "Great work! You performed very well."
+                    : testFinalScore >= 60
+                      ? "Good effort! Keep practicing."
+                      : "Keep trying! You'll do better next time."}
+              </p>
+            </div>
+            
+            <Button
+              onClick={() => {
+                setIsTestSubmitted(false);
+                onBack();
+              }}
+              className="w-full"
+            >
+              Go to Next Test <ChevronRight className="w-3 h-3 ml-1" />
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
