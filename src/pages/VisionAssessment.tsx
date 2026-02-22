@@ -325,7 +325,7 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
     };
   }, [isTracking]);
 
-  // Timer effect: 20-second countdown for tracking, elapsed for color/other tests
+  // Timer effect: 20-second countdown for tracking, elapsed for scene tests
   useEffect(() => {
     if (isRecording && isTracking && !isTrackingComplete) {
       timerIntervalRef.current = setInterval(() => {
@@ -336,7 +336,7 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
           return prev + 1;
         });
       }, 1000);
-    } else if (isColor || isClarity || isScene) {
+    } else if (isScene) {
       timerIntervalRef.current = setInterval(() => {
         setElapsedTime((prev) => prev + 1);
       }, 1000);
@@ -352,7 +352,7 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
         clearInterval(timerIntervalRef.current);
       }
     };
-  }, [isRecording, isTracking, isTrackingComplete, isColor, isClarity, isScene]);
+  }, [isRecording, isTracking, isTrackingComplete, isScene]);
 
   // Timer effect for Object Recognition rounds
   useEffect(() => {
@@ -399,6 +399,30 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
       }
     };
   }, [isClarity, clarityStartTime, claritySelections]);
+
+  // Timer effect for Color Differentiation test
+  useEffect(() => {
+    if (isColor) {
+      const colorStartTime = Date.now();
+      timerIntervalRef.current = setInterval(() => {
+        setElapsedTime(() => {
+          const elapsed = (Date.now() - colorStartTime) / 1000;
+          return Math.floor(elapsed);
+        });
+      }, 100);
+    } else {
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+        timerIntervalRef.current = null;
+      }
+    }
+
+    return () => {
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+      }
+    };
+  }, [isColor]);
 
   // Auto-submit when 20 seconds reached - stop dot, show result
   useEffect(() => {
@@ -766,9 +790,9 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
                   {selectedIdx !== undefined && (
                     <span className="text-sm font-medium">
                       {isCorrect ? (
-                        <span className="text-clinical-success">✓ Correct</span>
+                        <span className="text-clinical-success"></span>
                       ) : (
-                        <span className="text-destructive">✗ Try again</span>
+                        <span className="text-destructive"></span>
                       )}
                     </span>
                   )}
