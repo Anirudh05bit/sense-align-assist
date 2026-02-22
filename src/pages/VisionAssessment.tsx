@@ -101,7 +101,11 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
   const [objectRecognitionRoundTimes, setObjectRecognitionRoundTimes] = useState<number[]>([]);
   const [objectRecognitionCorrectCount, setObjectRecognitionCorrectCount] = useState(0);
   const [objectRecognitionShowCorrect, setObjectRecognitionShowCorrect] = useState(false);
+  const [objectRecognitionShowWrong, setObjectRecognitionShowWrong] = useState(false);
+  const [objectRecognitionWrongId, setObjectRecognitionWrongId] = useState<number | null>(null);
   const [objectRecognitionMetrics, setObjectRecognitionMetrics] = useState<any>(null);
+  const [objectRecognitionCurrentRoundTime, setObjectRecognitionCurrentRoundTime] = useState(0);
+  const [objectRecognitionUsedLabels, setObjectRecognitionUsedLabels] = useState<string[]>([]);
   const [dotPosition, setDotPosition] = useState({ x: 50, y: 50 });
   const [trackingResult, setTrackingResult] = useState<TrackingResult | null>(null);
   const [isTrackingComplete, setIsTrackingComplete] = useState(false);
@@ -140,9 +144,15 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
     return Math.round(accuracy);
   };
 
-  // Object Recognition: Generate random label for the round
-  const generateRandomLabel = (): string => {
-    const randomObj = OBJECTS[Math.floor(Math.random() * OBJECTS.length)];
+  // Object Recognition: Generate random label for the round (avoid repeats)
+  const generateRandomLabel = (usedLabels: string[]): string => {
+    const availableObjects = OBJECTS.filter(obj => !usedLabels.includes(obj.label));
+    if (availableObjects.length === 0) {
+      // If all labels used (shouldn't happen in 3 rounds), reset and pick from all
+      const randomObj = OBJECTS[Math.floor(Math.random() * OBJECTS.length)];
+      return randomObj.label;
+    }
+    const randomObj = availableObjects[Math.floor(Math.random() * availableObjects.length)];
     return randomObj.label;
   };
 
@@ -152,13 +162,22 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
     const avgTimePerRound = totalTime / roundTimes.length;
     const accuracyScore = (correctCount / 3) * 100;
     
-    // Time score: faster times get higher scores
-    let timeScore = 100;
-    if (avgTimePerRound <= 3) timeScore = 100;
-    else if (avgTimePerRound <= 5) timeScore = 90;
-    else if (avgTimePerRound <= 10) timeScore = 80;
-    else if (avgTimePerRound <= 15) timeScore = 70;
-    else timeScore = 50;
+    // Inclusive neurodiversity-friendly scoring
+    // Baseline: μ (mean) = 1.2 sec, σ (std deviation) = 0.5 sec
+    // Generous baseline accommodates typical development, ASD, ADHD, and mild ID
+    const speedBaseline_mu = 1.2; // seconds - healthy baseline for age 6-12
+    const speedBaseline_sigma = 0.5; // seconds - allowed variation
+    
+    // Calculate Speed Index using exponential function
+    // Speed Index = 100 × exp(-(T - μ) / σ)
+    // This gives full points for baseline speed, penalizes very slow responses gently
+    const speedDifference = (avgTimePerRound - speedBaseline_mu) / speedBaseline_sigma;
+    const speedIndex = Math.max(0, Math.min(100, 100 * Math.exp(-speedDifference)));
+    
+    // Inclusive scoring formula: 75% Accuracy + 25% Speed
+    // Accuracy is dominant to support children with processing delays
+    // Speed is secondary modifier to encourage improvement
+    const finalScore = Math.round((accuracyScore * 0.75) + (speedIndex * 0.25));
     
     return {
       correctCount,
@@ -166,8 +185,8 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
       accuracyScore: Math.round(accuracyScore),
       totalTime: totalTime.toFixed(1),
       avgTimePerRound: avgTimePerRound.toFixed(1),
-      timeScore,
-      finalScore: Math.round((accuracyScore * 0.7) + (timeScore * 0.3)),
+      speedIndex: Math.round(speedIndex),
+      finalScore: Math.max(0, Math.min(100, finalScore)),
     };
   };
 
@@ -226,12 +245,18 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
     } else if (testId === 1) {
       setSelected([]);
       setObjectRecognitionRound(1);
-      setObjectRecognitionTargetLabel(generateRandomLabel());
+      setObjectRecognitionUsedLabels([]);
+      const newLabel = generateRandomLabel([]);
+      setObjectRecognitionTargetLabel(newLabel);
+      setObjectRecognitionUsedLabels([newLabel]);
       setObjectRecognitionStartTime(Date.now());
       setObjectRecognitionRoundStartTime(Date.now());
       setObjectRecognitionRoundTimes([]);
       setObjectRecognitionCorrectCount(0);
       setObjectRecognitionShowCorrect(false);
+      setObjectRecognitionShowWrong(false);
+      setObjectRecognitionWrongId(null);
+      setObjectRecognitionCurrentRoundTime(0);
       setObjectRecognitionMetrics(null);
     }
     setIsTestSubmitted(false);
@@ -325,6 +350,29 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
     };
   }, [isRecording, isTracking, isTrackingComplete, isColor, isClarity, isScene]);
 
+  // Timer effect for Object Recognition rounds
+  useEffect(() => {
+    if (isObjectRecognition && objectRecognitionRoundStartTime && !objectRecognitionMetrics) {
+      timerIntervalRef.current = setInterval(() => {
+        setObjectRecognitionCurrentRoundTime(() => {
+          const elapsed = (Date.now() - (objectRecognitionRoundStartTime || Date.now())) / 1000;
+          return elapsed;
+        });
+      }, 100);
+    } else {
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+        timerIntervalRef.current = null;
+      }
+    }
+
+    return () => {
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+      }
+    };
+  }, [isObjectRecognition, objectRecognitionRoundStartTime, objectRecognitionMetrics]);
+
   // Auto-submit when 20 seconds reached - stop dot, show result
   useEffect(() => {
     if (isTracking && isRecording && elapsedTime >= TRACKING_DURATION_SEC && !isTrackingComplete) {
@@ -408,44 +456,48 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
   })();
 
   return (
-    <div className="p-8 animate-fade-in">
-      <button onClick={onBack} className="text-sm text-primary hover:underline mb-4 block">← Back to tests</button>
-      <div className="flex items-center justify-between mb-6">
+    <div className="p-4 animate-fade-in">
+      <button onClick={onBack} className="text-sm text-primary hover:underline mb-2 block">← Back to tests</button>
+      <div className="flex items-center justify-between mb-3">
         <div>
-          <h2 className="font-display text-xl font-bold text-foreground">{test.title}</h2>
-          <p className="text-sm text-muted-foreground">{test.desc}</p>
+          <h2 className="font-display text-lg font-bold text-foreground">{test.title}</h2>
+          <p className="text-xs text-muted-foreground">{test.desc}</p>
         </div>
         <div className="flex items-center gap-4">
-          <div className="clinical-card px-4 py-2 flex items-center gap-2">
-            <Clock className="w-4 h-4 text-muted-foreground" />
-            <span className="text-sm font-medium text-foreground">
-              {isTracking && isRecording && !isTrackingComplete
-                ? formatTime(Math.max(0, TRACKING_DURATION_SEC - elapsedTime))
-                : isScene || isClarity || isColor
-                  ? formatTime(elapsedTime)
-                  : formatTime(elapsedTime)}
-            </span>
-          </div>
-          <div className="clinical-card px-4 py-2 flex items-center gap-2">
-            <BarChart2 className="w-4 h-4 text-muted-foreground" />
-            <span className="text-sm font-medium text-foreground">
-              {isClarity
-                ? claritySelection !== null
-                  ? `Score: ${clarityAccuracy}%`
-                  : "Score: --"
-                : isColor
-                  ? colorAnswered > 0
-                    ? `Score: ${colorAccuracy}%`
-                    : "Score: --"
-                  : isScene
-                    ? sceneAccuracy !== null
-                      ? `Score: ${sceneAccuracy}%`
+          {!isObjectRecognition && (
+            <>
+              <div className="clinical-card px-4 py-2 flex items-center gap-2">
+                <Clock className="w-4 h-4 text-muted-foreground" />
+                <span className="text-sm font-medium text-foreground">
+                  {isTracking && isRecording && !isTrackingComplete
+                    ? formatTime(Math.max(0, TRACKING_DURATION_SEC - elapsedTime))
+                    : isScene || isClarity || isColor
+                      ? formatTime(elapsedTime)
+                      : formatTime(elapsedTime)}
+                </span>
+              </div>
+              <div className="clinical-card px-4 py-2 flex items-center gap-2">
+                <BarChart2 className="w-4 h-4 text-muted-foreground" />
+                <span className="text-sm font-medium text-foreground">
+                  {isClarity
+                    ? claritySelection !== null
+                      ? `Score: ${clarityAccuracy}%`
                       : "Score: --"
-                    : trackingResult
-                      ? `Score: ${trackingResult.accuracyPercent}%`
-                      : "Score: --"}
-            </span>
-          </div>
+                    : isColor
+                      ? colorAnswered > 0
+                        ? `Score: ${colorAccuracy}%`
+                        : "Score: --"
+                      : isScene
+                        ? sceneAccuracy !== null
+                          ? `Score: ${sceneAccuracy}%`
+                          : "Score: --"
+                        : trackingResult
+                          ? `Score: ${trackingResult.accuracyPercent}%`
+                          : "Score: --"}
+                </span>
+              </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -454,29 +506,38 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
         <div>
           {!objectRecognitionMetrics ? (
             <>
-              <div className="mb-8">
-                <div className="flex items-center justify-between mb-6">
+              <div className="mb-2 p-2 bg-gradient-to-r from-blue-50 to-blue-100 rounded-lg border-2 border-blue-300 text-center">
+                <p className="text-xs text-muted-foreground mb-0.5">Find the label:</p>
+                <p className="text-xl font-bold text-clinical-info uppercase tracking-wide">{objectRecognitionTargetLabel}</p>
+              </div>
+              
+              <div className="mb-3">
+                <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-xs text-muted-foreground mb-1">Round {objectRecognitionRound} of 3</p>
-                    <p className="text-sm text-foreground font-semibold">Find and select:</p>
+                    <p className="text-xs text-muted-foreground mb-0.5">Round {objectRecognitionRound} of 3</p>
+                    <p className="text-xs text-foreground font-semibold">Select:</p>
                   </div>
-                  <div className="text-5xl">{OBJECTS.find(obj => obj.label === objectRecognitionTargetLabel)?.emoji}</div>
+                  <div className="text-4xl">{OBJECTS.find(obj => obj.label === objectRecognitionTargetLabel)?.emoji}</div>
                 </div>
-                <p className="text-2xl font-bold text-clinical-info capitalize text-center py-4 bg-blue-50 rounded-xl border-2 border-blue-200">
-                  {objectRecognitionTargetLabel}
-                </p>
               </div>
 
               {objectRecognitionShowCorrect && (
-                <div className="mb-6 p-4 bg-green-50 border-2 border-green-300 rounded-xl text-center animate-pulse">
-                  <Check className="w-8 h-8 text-clinical-success mx-auto mb-2" />
-                  <p className="text-green-700 font-semibold">Correct! ✓</p>
+                <div className="mb-3 p-2 bg-green-50 border-2 border-green-300 rounded-lg text-center animate-pulse">
+                  <Check className="w-6 h-6 text-clinical-success mx-auto mb-1" />
+                  <p className="text-sm text-green-700 font-semibold">Correct! ✓</p>
+                </div>
+              )}
+
+              {objectRecognitionShowWrong && (
+                <div className="mb-3 p-2 bg-red-50 border-2 border-red-300 rounded-lg text-center animate-pulse">
+                  <p className="text-sm text-red-700 font-semibold">✗ Wrong! Try again</p>
                 </div>
               )}
               
-              <div className="grid grid-cols-4 gap-3 mb-6">
+              <div className="grid grid-cols-4 gap-2 mb-3">
                 {OBJECTS.map((obj) => {
                   const isTarget = obj.label === objectRecognitionTargetLabel && objectRecognitionShowCorrect;
+                  const isWrong = obj.id === objectRecognitionWrongId && objectRecognitionShowWrong;
                   return (
                     <button
                       key={obj.id}
@@ -495,7 +556,9 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
                           setTimeout(() => {
                             if (objectRecognitionRound < 3) {
                               setObjectRecognitionRound(objectRecognitionRound + 1);
-                              setObjectRecognitionTargetLabel(generateRandomLabel());
+                              const newLabel = generateRandomLabel(objectRecognitionUsedLabels);
+                              setObjectRecognitionTargetLabel(newLabel);
+                              setObjectRecognitionUsedLabels([...objectRecognitionUsedLabels, newLabel]);
                               setObjectRecognitionRoundStartTime(Date.now());
                               setObjectRecognitionShowCorrect(false);
                               setObjectRecognitionRoundTimes([...objectRecognitionRoundTimes, roundTime]);
@@ -506,13 +569,25 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
                               setObjectRecognitionMetrics(metrics);
                             }
                           }, 1500);
+                        } else {
+                          // Wrong selection
+                          setObjectRecognitionShowWrong(true);
+                          setObjectRecognitionWrongId(obj.id);
+                          
+                          // Hide wrong feedback after 1 second
+                          setTimeout(() => {
+                            setObjectRecognitionShowWrong(false);
+                            setObjectRecognitionWrongId(null);
+                          }, 1000);
                         }
                       }}
-                      disabled={objectRecognitionShowCorrect}
-                      className={`aspect-square rounded-xl border-2 flex items-center justify-center text-3xl transition-all ${
+                      disabled={objectRecognitionShowCorrect || objectRecognitionShowWrong}
+                      className={`aspect-square rounded-lg border-2 flex items-center justify-center text-2xl transition-all ${
                         isTarget
-                          ? "border-clinical-success bg-green-50 ring-2 ring-clinical-success scale-110"
-                          : "border-border bg-muted hover:border-primary disabled:opacity-50"
+                          ? "border-clinical-success bg-green-50 ring-2 ring-clinical-success scale-105"
+                          : isWrong
+                            ? "border-destructive bg-red-50 ring-2 ring-destructive scale-95"
+                            : "border-border bg-muted hover:border-primary disabled:opacity-50"
                       }`}
                       title={obj.label}
                     >
@@ -534,43 +609,46 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
                     <p className="text-xs text-muted-foreground mt-1">{objectRecognitionMetrics.correctCount}/3 Correct</p>
                   </div>
                   <div className="bg-white rounded-lg p-3">
-                    <p className="text-xs text-muted-foreground">Total Time</p>
-                    <p className="text-2xl font-bold text-foreground">{objectRecognitionMetrics.totalTime}s</p>
-                  </div>
-                  <div className="bg-white rounded-lg p-3">
-                    <p className="text-xs text-muted-foreground">Avg Time per Round</p>
+                    <p className="text-xs text-muted-foreground">Avg Time/Object</p>
                     <p className="text-2xl font-bold text-foreground">{objectRecognitionMetrics.avgTimePerRound}s</p>
                   </div>
                   <div className="bg-white rounded-lg p-3">
-                    <p className="text-xs text-muted-foreground">Speed Score</p>
-                    <p className="text-2xl font-bold text-foreground">{objectRecognitionMetrics.timeScore}%</p>
+                    <p className="text-xs text-muted-foreground">Processing Index</p>
+                    <p className="text-2xl font-bold text-foreground">{objectRecognitionMetrics.speedIndex}%</p>
+                  </div>
+                  <div className="bg-white rounded-lg p-3">
+                    <p className="text-xs text-muted-foreground">Total Time</p>
+                    <p className="text-2xl font-bold text-foreground">{objectRecognitionMetrics.totalTime}s</p>
                   </div>
                 </div>
 
-                <div className="bg-white rounded-lg p-4 mb-4">
-                  <p className="text-sm text-muted-foreground mb-2">Performance Feedback</p>
-                  <div className="space-y-2">
-                    {objectRecognitionMetrics.correctCount === 3 && objectRecognitionMetrics.avgTimePerRound <= 5 && (
-                      <p className="text-sm text-green-700 font-semibold">✓ Excellent recognition and quick response time!</p>
-                    )}
-                    {objectRecognitionMetrics.correctCount === 3 && objectRecognitionMetrics.avgTimePerRound > 5 && (
-                      <p className="text-sm text-blue-700 font-semibold">✓ All correct, but try to respond faster.</p>
-                    )}
-                    {objectRecognitionMetrics.correctCount < 3 && objectRecognitionMetrics.correctCount > 0 && (
-                      <p className="text-sm text-orange-700 font-semibold">⊝ {objectRecognitionMetrics.correctCount}/3 correct. Pay closer attention to object matching.</p>
-                    )}
-                    {objectRecognitionMetrics.correctCount === 0 && (
-                      <p className="text-sm text-red-700 font-semibold">✗ Needs more practice. Match the label carefully before selecting.</p>
-                    )}
-                  </div>
+                {/* Inclusive Performance Feedback */}
+                <div className="bg-white rounded-lg p-4 mb-4 border-l-4 border-clinical-info">
+                  <p className="text-sm font-semibold text-foreground mb-2">Performance Summary:</p>
+                  <p className="text-sm text-foreground leading-relaxed">
+                    {objectRecognitionMetrics.accuracyScore === 100
+                      ? "🌟 Excellent! Perfect accuracy on all labels. Strong visual recognition skills."
+                      : objectRecognitionMetrics.accuracyScore >= 90
+                        ? "✓ Very strong performance! Accurate label recognition with consistent responses."
+                        : objectRecognitionMetrics.accuracyScore >= 75
+                          ? "✓ Good performance. You're recognizing most labels correctly."
+                          : objectRecognitionMetrics.accuracyScore >= 60
+                            ? "✓ Making progress. Keep practicing to improve accuracy."
+                            : "Keep practicing label matching. Each attempt builds recognition skills!"}
+                  </p>
+                  {objectRecognitionMetrics.speedIndex < 50 && objectRecognitionMetrics.accuracyScore > 70 && (
+                    <p className="text-xs text-muted-foreground mt-2 italic">
+                      💡 Processing at a comfortable pace. Speed often improves with practice and familiarity.
+                    </p>
+                  )}
                 </div>
 
                 <div className="bg-gradient-to-r from-blue-100 to-blue-50 rounded-lg p-4">
                   <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold text-foreground">Final Score</span>
-                    <span className="text-3xl font-bold text-clinical-info">{objectRecognitionMetrics.finalScore} / 100</span>
+                    <span className="text-sm font-semibold text-foreground">Final Score (Inclusive Scoring)</span>
+                    <span className="text-3xl font-bold text-clinical-info">{objectRecognitionMetrics.finalScore} </span>
                   </div>
-                  <Progress value={objectRecognitionMetrics.finalScore} className="mt-3 h-2" />
+                  <p className="text-xs text-muted-foreground mt-2">75% Accuracy + 25% Processing Speed | Baseline: 1.2s/object</p>
                 </div>
               </div>
             </div>
@@ -623,7 +701,7 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
                         onClick={() =>
                           setColorSelections((prev) => ({ ...prev, [ri]: ci }))
                         }
-                        className={`w-16 h-16 rounded-xl border-2 transition-colors ${
+                      className={`w-12 h-12 rounded-lg border-2 transition-colors ${
                           isSelected
                             ? isCorrect
                               ? "border-clinical-success ring-2 ring-clinical-success"
@@ -653,7 +731,7 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
       {isScene && (
         <div>
           <p className="text-sm text-muted-foreground mb-4"></p>
-          <div className="clinical-card p-0 mb-4 rounded-xl overflow-hidden h-96 flex items-center justify-center bg-muted">
+          <div className="clinical-card p-0 mb-3 rounded-lg overflow-hidden h-48 flex items-center justify-center bg-muted">
             <img 
               src="/Images/image.png" 
               alt="Scene description test image"
@@ -748,9 +826,16 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
       )}
 
       {/* Response Accuracy Panel */}
-      <div className="mt-8 clinical-card p-5">
-        <h4 className="font-display font-semibold text-sm text-foreground mb-3">Response Accuracy</h4>
-        <div className="grid grid-cols-3 gap-4">
+      {!isObjectRecognition && (
+        <div className="mt-8 clinical-card p-5">
+          <h4 className="font-display font-semibold text-sm text-foreground mb-3">Response Accuracy</h4>
+          {isObjectRecognition && !objectRecognitionMetrics && (
+            <div className="mb-4 p-2 bg-blue-50 rounded-lg border-2 border-blue-200 text-center">
+              <p className="text-xs text-muted-foreground mb-1">Find the label:</p>
+              <p className="text-lg font-bold text-clinical-info capitalize">{objectRecognitionTargetLabel}</p>
+            </div>
+          )}
+          <div className="grid grid-cols-3 gap-4">
           <div className="text-center">
             <p className="text-2xl font-bold text-foreground">
               {isObjectRecognition && !objectRecognitionMetrics
@@ -797,8 +882,8 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
           </div>
           <div className="text-center">
             <p className="text-2xl font-bold text-foreground">
-              {isObjectRecognition && objectRecognitionRoundStartTime
-                ? `${((Date.now() - objectRecognitionRoundStartTime) / 1000).toFixed(1)}s`
+              {isObjectRecognition && objectRecognitionCurrentRoundTime
+                ? `${objectRecognitionCurrentRoundTime.toFixed(1)}s`
                 : isClarity || isColor
                   ? formatTime(elapsedTime)
                   : isScene
@@ -827,8 +912,9 @@ const VisionTestView = ({ testId, onBack, onNext }: { testId: number; onBack: ()
           className="mt-4 h-1.5"
         />
       </div>
+      )}
 
-      <div className="mt-6 flex gap-3">
+      <div className="mt-3 flex gap-2">
         <Button
           variant="outline"
           onClick={() => {
