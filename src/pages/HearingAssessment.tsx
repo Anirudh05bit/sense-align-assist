@@ -459,10 +459,10 @@ const HearingAssessment = () => {
 
 const HearingTestView = ({ testId, onBack }: { testId: number; onBack: () => void }) => {
   const test = hearingTests.find((t) => t.id === testId)!;
-
+   
   // Speech (used by tests 3 & 4)
   const recognizer = useSpeechRecognizer();
-
+  const [manualSentence, setManualSentence] = useState("");
   // Global “score” display (simple placeholder)
   const [scoreDisplay, setScoreDisplay] = useState<string>("--");
   // Track currently playing audio across all clips
@@ -600,13 +600,18 @@ const HearingTestView = ({ testId, onBack }: { testId: number; onBack: () => voi
    * TEST 4: Pronunciation (sentence)
    * -------------------------------
    */
-  const sentenceScores = useMemo(() => {
-    if (!recognizer.transcript) return null;
-    const sim = similarityScore(pronunciationSentence, recognizer.transcript);
-    const conf = Math.round((recognizer.confidence || 0) * 100);
-    const clarity = clamp(Math.round(sim * 0.75 + conf * 0.25), 0, 100);
-    return { sim, conf, clarity };
-  }, [recognizer.transcript, recognizer.confidence]);
+const sentenceScores = useMemo(() => {
+  const spoken = (recognizer.transcript || manualSentence || "").trim();
+  if (!spoken) return null;
+
+  const sim = similarityScore(pronunciationSentence, spoken);
+  const conf = recognizer.transcript
+    ? Math.round((recognizer.confidence || 0) * 100)
+    : 85;
+
+  const clarity = clamp(Math.round(sim * 0.75 + conf * 0.25), 0, 100);
+  return { sim, conf, clarity, spoken };
+}, [recognizer.transcript, recognizer.confidence, manualSentence]);
 
   /**
    * ---------------------------------------------
@@ -632,6 +637,7 @@ const HearingTestView = ({ testId, onBack }: { testId: number; onBack: () => voi
     setWordScores([]);
     setFinalWordScore(null);
     setManualInput("");
+    setManualSentence("");
 
     // Reset speech
     recognizer.reset();
