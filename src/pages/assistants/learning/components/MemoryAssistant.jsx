@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 
 // Hardcode or use environment variable for Gemini API Key here
-const API_KEY = import.meta.env.VITE_GEMINI_API_KEY || "AIzaSyDdKq8tNRtGjf34PZKvT96CGCfGwbsmKYw";
+const API_KEY = import.meta.env.VITE_GEMINI_API_KEY || "AIzaSyAQ5pf0l6-hVpSrkDq6PC8StoAk7on2Gtk";
 
-const callGeminiExtractAPI = async (text) => {
+const callGeminiExtractAPI = async (text, fileBase64) => {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`;
 
-    const prompt = `You are a cognitive accessibility assistant. Extract the most important facts, definitions, and rules from the following text to create memory flashcards.
+    const prompt = `You are a cognitive accessibility assistant. Extract the most important facts, definitions, and rules from the following text (and/or attached PDF) to create memory flashcards.
     
 IMPORTANT: You MUST respond ONLY with a valid JSON array. Do not wrap the JSON in markdown blocks. Output the raw JSON array string.
 
@@ -21,8 +21,22 @@ Keep the content concise. Extract at least 3, and at most 6 cards. Allowed types
 
 Text to extract from:
 """
-${text}
+${text || "[See attached PDF document]"}
 """`;
+
+    const parts = [{ text: prompt }];
+
+    if (fileBase64) {
+        const base64Data = fileBase64.split(',')[1];
+        if (base64Data) {
+            parts.push({
+                inlineData: {
+                    data: base64Data,
+                    mimeType: "application/pdf"
+                }
+            });
+        }
+    }
 
     const response = await fetch(url, {
         method: 'POST',
@@ -30,7 +44,7 @@ ${text}
             'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
+            contents: [{ parts }],
             generationConfig: { temperature: 0.3 }
         })
     });
@@ -108,12 +122,47 @@ const Flashcard = ({ card }) => {
 
 const MemoryAssistant = () => {
     const [text, setText] = useState("");
+    const [file, setFile] = useState(null);
+    const [fileBase64, setFileBase64] = useState(null);
     const [cards, setCards] = useState([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
 
+    const handleFileChange = (e) => {
+        const selectedFile = e.target.files[0];
+        if (!selectedFile) {
+            setFile(null);
+            setFileBase64(null);
+            return;
+        }
+
+        if (selectedFile.type !== 'application/pdf') {
+            setError("Only PDF files are supported.");
+            setFile(null);
+            setFileBase64(null);
+            return;
+        }
+
+        setError(null);
+        setFile(selectedFile);
+        const reader = new FileReader();
+        reader.readAsDataURL(selectedFile);
+        reader.onload = () => {
+            setFileBase64(reader.result);
+        };
+        reader.onerror = () => {
+            setError("Failed to read the PDF file.");
+            setFile(null);
+            setFileBase64(null);
+        };
+    };
+
+
     const generateCards = async () => {
-        if (!text.trim()) return;
+        if (!text.trim() && !fileBase64) {
+            setError("Please provide either some text or a PDF document.");
+            return;
+        }
         if (!API_KEY || API_KEY === "YOUR_API_KEY_HERE") {
             setError("Please add your Gemini API Key in the code (MemoryAssistant.jsx).");
             return;
@@ -124,7 +173,7 @@ const MemoryAssistant = () => {
         setError(null);
 
         try {
-            const result = await callGeminiExtractAPI(text);
+            const result = await callGeminiExtractAPI(text, fileBase64);
             setCards(result);
         } catch (err) {
             console.error(err);
@@ -150,7 +199,39 @@ const MemoryAssistant = () => {
             )}
 
             <div className="glass-panel mb-8" style={{ maxWidth: '800px', background: 'rgba(20,25,40,0.5)', borderColor: 'rgba(255,255,255,0.06)' }}>
-                <label className="font-heading mb-2 text-lg" style={{ fontWeight: 600, display: 'block', color: '#e8e8f0' }}>Study Material</label>
+                <label className="font-heading mb-4 text-lg" style={{ fontWeight: 600, display: 'block', color: '#e8e8f0' }}>Study Material</label>
+
+                {/* File Upload Section */}
+                <div className="mb-4">
+                    <label className="text-sm mb-2 block" style={{ color: 'rgba(232,232,240,0.7)' }}>Upload PDF Document</label>
+                    <input
+                        type="file"
+                        accept="application/pdf"
+                        onChange={handleFileChange}
+                        className="input-control"
+                        style={{
+                            padding: '0.5rem',
+                            fontSize: '0.9rem',
+                            width: '100%',
+                            background: 'rgba(0,0,0,0.2)',
+                            color: '#e8e8f0',
+                            border: '1px dashed rgba(167,139,250,0.4)',
+                            cursor: 'pointer'
+                        }}
+                    />
+                    {file && (
+                        <div className="text-sm mt-2 flex items-center gap-2" style={{ color: '#10B981' }}>
+                            <span>📄</span> {file.name} ({(file.size / 1024 / 1024).toFixed(2)} MB)
+                        </div>
+                    )}
+                </div>
+
+                <div className="flex items-center gap-4 mb-4">
+                    <div style={{ flexGrow: 1, height: '1px', background: 'rgba(255,255,255,0.1)' }}></div>
+                    <span className="text-xs font-semibold tracking-wider" style={{ color: 'rgba(232,232,240,0.5)' }}>AND / OR PASTE TEXT</span>
+                    <div style={{ flexGrow: 1, height: '1px', background: 'rgba(255,255,255,0.1)' }}></div>
+                </div>
+
                 <textarea
                     className="input-control mb-4"
                     rows="6"
@@ -159,7 +240,7 @@ const MemoryAssistant = () => {
                     onChange={(e) => setText(e.target.value)}
                     style={{ resize: 'vertical', background: 'rgba(0,0,0,0.2)', color: '#e8e8f0', border: '1px solid rgba(255,255,255,0.1)' }}
                 />
-                <button className="btn btn-primary" onClick={generateCards} disabled={loading || !text.trim()} style={{ fontSize: '1.05rem', padding: '0.75rem 1.5rem', opacity: (loading || !text.trim()) ? 0.5 : 1 }}>
+                <button className="btn btn-primary" onClick={generateCards} disabled={loading || (!text.trim() && !fileBase64)} style={{ fontSize: '1.05rem', padding: '0.75rem 1.5rem', opacity: (loading || (!text.trim() && !fileBase64)) ? 0.5 : 1 }}>
                     {loading ? '🧠 Extracting Knowledge...' : '✨ Generate Memory Cards'}
                 </button>
             </div>

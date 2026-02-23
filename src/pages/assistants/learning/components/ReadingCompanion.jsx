@@ -1,16 +1,30 @@
 import React, { useState, useRef } from 'react';
 
 // Hardcode or use environment variable for Gemini API Key here
-const API_KEY = import.meta.env.VITE_GEMINI_API_KEY || "AIzaSyDdKq8tNRtGjf34PZKvT96CGCfGwbsmKYw";
+const API_KEY = import.meta.env.VITE_GEMINI_API_KEY || "AIzaSyAQ5pf0l6-hVpSrkDq6PC8StoAk7on2Gtk";
 
-const callGeminiExplainAPI = async (text) => {
+const callGeminiExplainAPI = async (text, fileBase64) => {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`;
     const prompt = `Explain the following text simply and clearly in 2-3 sentences max. Assume the reader struggles with cognitive overload and complex terminology. Text: "${text}"`;
+
+    const parts = [{ text: prompt }];
+
+    if (fileBase64) {
+        const base64Data = fileBase64.split(',')[1];
+        if (base64Data) {
+            parts.push({
+                inlineData: {
+                    data: base64Data,
+                    mimeType: "application/pdf"
+                }
+            });
+        }
+    }
 
     const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.3 } })
+        body: JSON.stringify({ contents: [{ parts }], generationConfig: { temperature: 0.3 } })
     });
 
     if (!response.ok) throw new Error("API failed");
@@ -18,7 +32,7 @@ const callGeminiExplainAPI = async (text) => {
     return data.candidates?.[0]?.content?.parts?.[0]?.text || "Explanation failed.";
 };
 
-const callGeminiChatAPI = async (question, documentText, history) => {
+const callGeminiChatAPI = async (question, documentText, fileBase64, history) => {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`;
 
     // Construct context
@@ -26,9 +40,9 @@ const callGeminiChatAPI = async (question, documentText, history) => {
     const prompt = `You are a helpful reading companion for someone who needs simple, clear answers. 
 Answer the user's question based strictly on the provided document. Keep your answer brief, warm, and highly readable.
 
-Document:
+Document Context:
 """
-${documentText}
+${documentText || "[See attached PDF document]"}
 """
 
 Conversation History:
@@ -36,10 +50,24 @@ ${formattedHistory}
 
 User's new question: ${question}`;
 
+    const parts = [{ text: prompt }];
+
+    if (fileBase64) {
+        const base64Data = fileBase64.split(',')[1];
+        if (base64Data) {
+            parts.push({
+                inlineData: {
+                    data: base64Data,
+                    mimeType: "application/pdf"
+                }
+            });
+        }
+    }
+
     const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.4 } })
+        body: JSON.stringify({ contents: [{ parts }], generationConfig: { temperature: 0.4 } })
     });
 
     if (!response.ok) throw new Error("API failed");
@@ -47,10 +75,42 @@ User's new question: ${question}`;
     return data.candidates?.[0]?.content?.parts?.[0]?.text || "Answer failed.";
 };
 
+const callGeminiReadPdfAPI = async (fileBase64) => {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`;
+    const prompt = `Extract ALL the text from this PDF and output it exactly as it appears. Do not summarize or format it, just return the raw text payload readable in plain text.`;
+
+    const parts = [{ text: prompt }];
+
+    if (fileBase64) {
+        const base64Data = fileBase64.split(',')[1];
+        if (base64Data) {
+            parts.push({
+                inlineData: {
+                    data: base64Data,
+                    mimeType: "application/pdf"
+                }
+            });
+        }
+    }
+
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts }], generationConfig: { temperature: 0.1 } })
+    });
+
+    if (!response.ok) throw new Error("API failed");
+    const data = await response.json();
+    return data.candidates?.[0]?.content?.parts?.[0]?.text || "Text extraction failed.";
+};
+
 const ReadingCompanion = () => {
     // We start in 'editing' mode if there's no document inserted.
     const [documentText, setDocumentText] = useState("");
+    const [file, setFile] = useState(null);
+    const [fileBase64, setFileBase64] = useState(null);
     const [isEditing, setIsEditing] = useState(true);
+    const [readingModeLoading, setReadingModeLoading] = useState(false);
 
     const [selectedText, setSelectedText] = useState("");
     const [explanation, setExplanation] = useState("");
@@ -63,13 +123,60 @@ const ReadingCompanion = () => {
 
     const textRef = useRef(null);
 
-    const startReading = () => {
-        if (!documentText.trim()) return;
-        setIsEditing(false);
-        // Reset chat and explanations when changing document
-        setMessages([{ role: 'ai', content: 'Hi! I am your AI Reading Companion. Highlight any text on the left to get an instant explanation, or ask me a question about the document.' }]);
-        setExplanation("");
-        setSelectedText("");
+    const handleFileChange = (e) => {
+        const selectedFile = e.target.files[0];
+        if (!selectedFile) {
+            setFile(null);
+            setFileBase64(null);
+            return;
+        }
+
+        if (selectedFile.type !== 'application/pdf') {
+            setErrorExp("Only PDF files are supported.");
+            setFile(null);
+            setFileBase64(null);
+            return;
+        }
+
+        setErrorExp(null);
+        setFile(selectedFile);
+        const reader = new FileReader();
+        reader.readAsDataURL(selectedFile);
+        reader.onload = () => {
+            setFileBase64(reader.result);
+        };
+        reader.onerror = () => {
+            setErrorExp("Failed to read the PDF file.");
+            setFile(null);
+            setFileBase64(null);
+        };
+    };
+
+    const startReading = async () => {
+        if (!documentText.trim() && !fileBase64) return;
+
+        setReadingModeLoading(true);
+        setErrorExp(null);
+
+        try {
+            // If they uploaded a PDF but didn't provide text, extract the text so they can highlight it
+            let textToRender = documentText;
+            if (fileBase64 && !documentText.trim()) {
+                textToRender = await callGeminiReadPdfAPI(fileBase64);
+                setDocumentText(textToRender); // Populate the text area so it renders on the left
+            }
+
+            setIsEditing(false);
+            // Reset chat and explanations when changing document
+            setMessages([{ role: 'ai', content: 'Hi! I am your AI Reading Companion. Highlight any text on the left to get an instant explanation, or ask me a question about the document.' }]);
+            setExplanation("");
+            setSelectedText("");
+        } catch (err) {
+            console.error(err);
+            setErrorExp("Failed to prepare reading mode: " + err.message);
+        } finally {
+            setReadingModeLoading(false);
+        }
     };
 
     const handleTextSelection = async () => {
@@ -88,7 +195,8 @@ const ReadingCompanion = () => {
             setErrorExp(null);
 
             try {
-                const result = await callGeminiExplainAPI(text);
+                // Pass base64 just in case context helps explanation
+                const result = await callGeminiExplainAPI(text, fileBase64);
                 setExplanation(result);
             } catch (err) {
                 setExplanation("Error: " + err.message);
@@ -112,7 +220,7 @@ const ReadingCompanion = () => {
         setLoadingChat(true);
 
         try {
-            const response = await callGeminiChatAPI(userMsg, documentText, messages);
+            const response = await callGeminiChatAPI(userMsg, documentText, fileBase64, messages);
             setMessages(prev => [...prev, { role: 'ai', content: response }]);
         } catch (err) {
             setMessages(prev => [...prev, { role: 'ai', content: 'Sorry, I hit an error connecting to the AI: ' + err.message }]);
@@ -126,14 +234,52 @@ const ReadingCompanion = () => {
             <header className="mb-6 flex-shrink-0 flex justify-between items-center">
                 <div>
                     <h2 className="text-3xl mb-2 text-gradient">AI Reading Companion</h2>
-                    <p className="text-muted text-lg">Read documents with a helpful AI by your side to explain complex terms.</p>
+                    <p className="text-muted text-lg">Read documents and PDFs with a helpful AI by your side to explain complex terms.</p>
                 </div>
             </header>
+
+            {errorExp && isEditing && (
+                <div className="mb-6 p-4 rounded-md" style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#FCA5A5' }}>
+                    <strong>Error:</strong> {errorExp}
+                </div>
+            )}
 
             {isEditing ? (
                 // EDIT MODE
                 <div className="glass-panel" style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', background: 'rgba(20,25,40,0.5)', borderColor: 'rgba(255,255,255,0.06)', maxWidth: '800px' }}>
-                    <label className="font-heading mb-2 text-lg" style={{ fontWeight: 600, color: '#e8e8f0' }}>Paste the Document to Read</label>
+                    <label className="font-heading mb-4 text-lg" style={{ fontWeight: 600, color: '#e8e8f0' }}>Document Input</label>
+
+                    {/* File Upload Section */}
+                    <div className="mb-4">
+                        <label className="text-sm mb-2 block" style={{ color: 'rgba(232,232,240,0.7)' }}>Upload PDF Document</label>
+                        <input
+                            type="file"
+                            accept="application/pdf"
+                            onChange={handleFileChange}
+                            className="input-control"
+                            style={{
+                                padding: '0.5rem',
+                                fontSize: '0.9rem',
+                                width: '100%',
+                                background: 'rgba(0,0,0,0.2)',
+                                color: '#e8e8f0',
+                                border: '1px dashed rgba(167,139,250,0.4)',
+                                cursor: 'pointer'
+                            }}
+                        />
+                        {file && (
+                            <div className="text-sm mt-2 flex items-center gap-2" style={{ color: '#10B981' }}>
+                                <span>📄</span> {file.name} ({(file.size / 1024 / 1024).toFixed(2)} MB)
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="flex items-center gap-4 mb-4">
+                        <div style={{ flexGrow: 1, height: '1px', background: 'rgba(255,255,255,0.1)' }}></div>
+                        <span className="text-xs font-semibold tracking-wider" style={{ color: 'rgba(232,232,240,0.5)' }}>AND / OR PASTE TEXT</span>
+                        <div style={{ flexGrow: 1, height: '1px', background: 'rgba(255,255,255,0.1)' }}></div>
+                    </div>
+
                     <textarea
                         className="input-control mb-4"
                         placeholder="Paste any article, long email, or document here to start reading with AI..."
@@ -141,7 +287,7 @@ const ReadingCompanion = () => {
                         onChange={(e) => setDocumentText(e.target.value)}
                         style={{
                             flexGrow: 1,
-                            minHeight: '300px',
+                            minHeight: '200px',
                             resize: 'vertical',
                             background: 'rgba(0,0,0,0.2)',
                             color: '#e8e8f0',
@@ -154,10 +300,10 @@ const ReadingCompanion = () => {
                     <button
                         className="btn btn-primary"
                         onClick={startReading}
-                        disabled={!documentText.trim()}
-                        style={{ alignSelf: 'flex-start', fontSize: '1.1rem', padding: '0.75rem 2rem', opacity: !documentText.trim() ? 0.5 : 1 }}
+                        disabled={(!documentText.trim() && !fileBase64) || readingModeLoading}
+                        style={{ alignSelf: 'flex-start', fontSize: '1.1rem', padding: '0.75rem 2rem', opacity: (!documentText.trim() && !fileBase64) || readingModeLoading ? 0.5 : 1 }}
                     >
-                        📖 Open in Reading Companion
+                        {readingModeLoading ? '⚙️ Preparing Document...' : '📖 Open in Reading Companion'}
                     </button>
                 </div>
             ) : (

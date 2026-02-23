@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 
 // Hardcode or use environment variable for Gemini API Key here
-const API_KEY = import.meta.env.VITE_GEMINI_API_KEY || "AIzaSyDdKq8tNRtGjf34PZKvT96CGCfGwbsmKYw";
+const API_KEY = import.meta.env.VITE_GEMINI_API_KEY || "AIzaSyAQ5pf0l6-hVpSrkDq6PC8StoAk7on2Gtk";
 
-const callGeminiDecomposeAPI = async (goal) => {
+const callGeminiDecomposeAPI = async (goal, fileBase64) => {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`;
 
-    const prompt = `You are an ADHD / cognitive accessibility executive function coach. A user is overwhelmed by a large goal. Break this goal down into exact, small, manageable steps.
+    const prompt = `You are an ADHD / cognitive accessibility executive function coach. A user is overwhelmed by a large goal or the attached document. Break this goal down into exact, small, manageable steps.
 
 IMPORTANT: You MUST respond ONLY with a valid JSON format. Output the raw JSON string without markdown blocks.
 
@@ -20,16 +20,30 @@ The JSON MUST have this exact structure:
 
 Make sure time estimates are realistic but encouraging (prefer 'mins' over hours if possible). Keep it to 5-8 steps.
 
-User's goal:
+User's goal / context:
 """
-${goal}
+${goal || "[See attached PDF document]"}
 """`;
+
+    const parts = [{ text: prompt }];
+
+    if (fileBase64) {
+        const base64Data = fileBase64.split(',')[1];
+        if (base64Data) {
+            parts.push({
+                inlineData: {
+                    data: base64Data,
+                    mimeType: "application/pdf"
+                }
+            });
+        }
+    }
 
     const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
+            contents: [{ parts }],
             generationConfig: { temperature: 0.2 }
         })
     });
@@ -56,12 +70,46 @@ ${goal}
 
 const TaskDecomposer = () => {
     const [goal, setGoal] = useState("");
+    const [file, setFile] = useState(null);
+    const [fileBase64, setFileBase64] = useState(null);
     const [plan, setPlan] = useState(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
 
+    const handleFileChange = (e) => {
+        const selectedFile = e.target.files[0];
+        if (!selectedFile) {
+            setFile(null);
+            setFileBase64(null);
+            return;
+        }
+
+        if (selectedFile.type !== 'application/pdf') {
+            setError("Only PDF files are supported.");
+            setFile(null);
+            setFileBase64(null);
+            return;
+        }
+
+        setError(null);
+        setFile(selectedFile);
+        const reader = new FileReader();
+        reader.readAsDataURL(selectedFile);
+        reader.onload = () => {
+            setFileBase64(reader.result);
+        };
+        reader.onerror = () => {
+            setError("Failed to read the PDF file.");
+            setFile(null);
+            setFileBase64(null);
+        };
+    };
+
     const generatePlan = async () => {
-        if (!goal.trim()) return;
+        if (!goal.trim() && !fileBase64) {
+            setError("Please provide either a goal description or a PDF document.");
+            return;
+        }
         if (!API_KEY || API_KEY === "YOUR_API_KEY_HERE") {
             setError("Please add your Gemini API Key in the code (TaskDecomposer.jsx).");
             return;
@@ -72,7 +120,7 @@ const TaskDecomposer = () => {
         setError(null);
 
         try {
-            const result = await callGeminiDecomposeAPI(goal);
+            const result = await callGeminiDecomposeAPI(goal, fileBase64);
             setPlan(result);
         } catch (err) {
             console.error(err);
@@ -98,7 +146,7 @@ const TaskDecomposer = () => {
             <header className="mb-8 flex justify-between items-center">
                 <div>
                     <h2 className="text-3xl mb-2 text-gradient">Task Breakdown Assistant</h2>
-                    <p className="text-muted text-lg">AI acts as your executive function coach to break down big goals.</p>
+                    <p className="text-muted text-lg">AI acts as your executive function coach to break down big goals or dense project specs.</p>
                 </div>
             </header>
 
@@ -113,7 +161,39 @@ const TaskDecomposer = () => {
                 {/* Left Column: Input */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
                     <div className="glass-panel" style={{ background: 'rgba(20,25,40,0.5)', borderColor: 'rgba(255,255,255,0.06)' }}>
-                        <label className="font-heading mb-2 text-lg" style={{ fontWeight: 600, display: 'block', color: '#e8e8f0' }}>Your Goal</label>
+                        <label className="font-heading mb-4 text-lg" style={{ fontWeight: 600, display: 'block', color: '#e8e8f0' }}>Your Context</label>
+
+                        {/* File Upload Section */}
+                        <div className="mb-4">
+                            <label className="text-sm mb-2 block" style={{ color: 'rgba(232,232,240,0.7)' }}>Upload Project PDF / Syllabus</label>
+                            <input
+                                type="file"
+                                accept="application/pdf"
+                                onChange={handleFileChange}
+                                className="input-control"
+                                style={{
+                                    padding: '0.5rem',
+                                    fontSize: '0.9rem',
+                                    width: '100%',
+                                    background: 'rgba(0,0,0,0.2)',
+                                    color: '#e8e8f0',
+                                    border: '1px dashed rgba(167,139,250,0.4)',
+                                    cursor: 'pointer'
+                                }}
+                            />
+                            {file && (
+                                <div className="text-sm mt-2 flex items-center gap-2" style={{ color: '#10B981' }}>
+                                    <span>📄</span> {file.name} ({(file.size / 1024 / 1024).toFixed(2)} MB)
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="flex items-center gap-4 mb-4">
+                            <div style={{ flexGrow: 1, height: '1px', background: 'rgba(255,255,255,0.1)' }}></div>
+                            <span className="text-xs font-semibold tracking-wider" style={{ color: 'rgba(232,232,240,0.5)' }}>AND / OR DESCRIBE IT</span>
+                            <div style={{ flexGrow: 1, height: '1px', background: 'rgba(255,255,255,0.1)' }}></div>
+                        </div>
+
                         <input
                             type="text"
                             className="input-control mb-4"
@@ -123,7 +203,7 @@ const TaskDecomposer = () => {
                             onKeyDown={(e) => e.key === 'Enter' && generatePlan()}
                             style={{ fontSize: '1.1rem', padding: '1rem', background: 'rgba(0,0,0,0.2)', color: '#e8e8f0', border: '1px solid rgba(255,255,255,0.1)' }}
                         />
-                        <button className="btn btn-primary" onClick={generatePlan} disabled={loading || !goal.trim()} style={{ fontSize: '1.05rem', padding: '0.75rem 1.5rem', width: '100%', opacity: (loading || !goal.trim()) ? 0.5 : 1 }}>
+                        <button className="btn btn-primary" onClick={generatePlan} disabled={loading || (!goal.trim() && !fileBase64)} style={{ fontSize: '1.05rem', padding: '0.75rem 1.5rem', width: '100%', opacity: (loading || (!goal.trim() && !fileBase64)) ? 0.5 : 1 }}>
                             {loading ? '⚙️ Breaking down task...' : '🎯 Create Action Plan'}
                         </button>
                     </div>
